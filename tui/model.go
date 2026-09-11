@@ -699,6 +699,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.updateDimensions()
+		// Content is wrapped to a width that no longer exists, and the offset was
+		// clamped against the old height — both have to be recomputed.
+		m.updateViewport()
 
 	case sessionReadyMsg:
 		if msg.err != nil {
