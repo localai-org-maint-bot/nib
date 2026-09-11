@@ -149,3 +149,28 @@ func TestTruncateLine(t *testing.T) {
 		t.Fatalf("rune-aware: got %q", got)
 	}
 }
+
+// TestResolveApprovalClearsStaleReasoning guards the confusing-UX bug where the
+// reasoning trace captured before a tool approval was re-rendered underneath the
+// post-approval status line, making it look like the model was re-thinking the
+// step the user had just answered.
+func TestResolveApprovalClearsStaleReasoning(t *testing.T) {
+	ch := make(chan chat.ToolCallResponse, 1)
+	m := Model{
+		textarea:         textarea.New(),
+		viewport:         viewport.New(80, 10),
+		awaitingApproval: true,
+		pendingTool:      &chat.ToolCallRequest{Name: "bash", Arguments: `{"script":"ls"}`},
+		toolResponseChan: ch,
+		reasoning:        "stale trace from before the approval",
+	}
+
+	next, cmd := m.resolveApproval(chat.ToolCallResponse{Approved: true})
+	if cmd != nil {
+		cmd()
+	}
+
+	if got := next.(Model).reasoning; got != "" {
+		t.Errorf("reasoning = %q, want empty after an approval resolves", got)
+	}
+}

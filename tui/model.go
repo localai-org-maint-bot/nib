@@ -1377,6 +1377,9 @@ func (m Model) resolveApproval(resp chat.ToolCallResponse) (tea.Model, tea.Cmd) 
 	m.approvalEditing = false
 	m.pendingTool = nil
 	m.textarea.Reset()
+	// The trace that led to this call is answered now; leaving it up reads as
+	// the model re-thinking a step the user already decided.
+	m.reasoning = ""
 	m.loading = true
 	m.status = "Executing tool..."
 	m.updateViewport()
