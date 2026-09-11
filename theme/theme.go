@@ -39,6 +39,20 @@ var (
 	ReasoningGlyph = "✻"  // marks a block of model thinking/reasoning
 )
 
+// spinnerFrames animates the working indicator. Braille cells read as a smooth
+// rotation at the 80ms tick; the VT console cannot render them, so
+// applyGlyphProfile swaps in the classic ASCII barber pole there. Every frame in
+// a set is the same width so the status line never jitters.
+var spinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+
+// SpinnerFrames returns the animation frames for the current terminal profile.
+func SpinnerFrames() []string {
+	if RestrictedGlyphs() {
+		return []string{"-", "\\", "|", "/"}
+	}
+	return spinnerFrames
+}
+
 // RestrictedGlyphs reports whether glyphs must fall back to ASCII because the
 // terminal can only render a fixed bitmap font with no arrows, geometric
 // shapes, or eighth-block glyphs. The Linux VT console (TERM=linux) is the

@@ -261,7 +261,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			for _, line := range strings.Split(strings.TrimRight(reasoning, "\n"), "\n") {
 				fmt.Fprintln(out, "  "+theme.Reasoning.Render(line))
 			}
-			spin.start(theme.Status(theme.VerbThinking, 0))
+			spin.start(theme.VerbThinking)
 		},
 		OnToolCall: func(req chat.ToolCallRequest) chat.ToolCallResponse {
 			spin.stop()
@@ -329,7 +329,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			switch strings.ToLower(text) {
 			case "y", "yes", "1":
 				response = chat.ToolCallResponse{Approved: true}
-				spin.start(theme.Status(theme.VerbWorking, 0))
+				spin.start(theme.VerbWorking)
 			case "a", "always", "2":
 				response = chat.ToolCallResponse{Approved: true, AlwaysAllow: true, AlwaysPrefix: prefix}
 				if prefix != "" {
@@ -337,17 +337,17 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 				} else {
 					fmt.Fprintln(out, theme.Subtle.Render("added '"+req.Name+"' to the session allow list"))
 				}
-				spin.start(theme.Status(theme.VerbWorking, 0))
+				spin.start(theme.VerbWorking)
 			case "all", "3":
 				response = chat.ToolCallResponse{Approved: true, AllowAllTurn: true}
 				fmt.Fprintln(out, theme.Subtle.Render("approving all tool calls for this turn"))
-				spin.start(theme.Status(theme.VerbWorking, 0))
+				spin.start(theme.VerbWorking)
 			case "n", "no":
 				response = chat.ToolCallResponse{Approved: false}
 				fmt.Fprintln(out, theme.Error.Render(theme.Cross+" denied"))
 			default:
 				response = chat.ToolCallResponse{Approved: true, Adjustment: text}
-				spin.start(theme.Status(theme.VerbWorking, 0))
+				spin.start(theme.VerbWorking)
 			}
 			return response
 		},
@@ -365,7 +365,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
 				fmt.Fprintln(out, "  "+theme.Subtle.Render(line))
 			}
-			spin.start(theme.Status(theme.VerbWorking, 0))
+			spin.start(theme.VerbWorking)
 		},
 		// Both notices fire from the agent's goroutine while the spinner may be
 		// mid-frame, so they go through writeNotice rather than Fprintln: an
@@ -399,12 +399,12 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			for _, line := range strings.Split(preview, "\n") {
 				fmt.Fprintln(out, theme.Help.Render("  "+line))
 			}
-			spin.start(theme.Status(theme.VerbThinking, 0))
+			spin.start(theme.VerbThinking)
 		},
 		OnAgentEvent: func(ev chat.AgentEvent) {
 			spin.stop()
 			fmt.Fprintln(out, formatAgentEventLine(ev))
-			spin.start(theme.Status(theme.VerbThinking, 0))
+			spin.start(theme.VerbThinking)
 		},
 	}
 
@@ -517,7 +517,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 				}
 				continue
 			case slash.KindCompact:
-				spin.start(theme.Status(theme.VerbThinking, 0))
+				spin.start(theme.VerbThinking)
 				before, after, err := session.CompactHistory()
 				spin.stop()
 				if err != nil {
@@ -577,7 +577,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 				continue
 			default: // slash.KindSend
 				fmt.Fprintln(out)
-				spin.start(theme.Status(theme.VerbThinking, 0))
+				spin.start(theme.VerbThinking)
 				files, overrides := attachstage.BuildSend(pending, action)
 				if len(files) == 0 {
 					_, err = session.SendMessage(action.Text)

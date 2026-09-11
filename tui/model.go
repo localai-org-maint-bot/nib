@@ -125,9 +125,6 @@ type Model struct {
 	// beside the context badge. Refreshed wherever contextTokens is.
 	sessionUsage chat.SessionUsage
 
-	// Animation state
-	statusPhase int
-
 	// Sub-agent jobs state
 	jobs           []agentJob
 	agentEventChan chan chat.AgentEvent
@@ -220,6 +217,10 @@ type agentEventMsg chat.AgentEvent
 // toolResultPreviewLines bounds how many lines of a tool result we show inline.
 const toolResultPreviewLines = 12
 
+// spinnerFPS matches the 80ms frame advance used by comparable harnesses —
+// fast enough to read as motion, slow enough to stay off the CPU.
+const spinnerFPS = time.Second / 12
+
 // toolResultMsg carries a finished tool's output to the UI.
 type toolResultMsg chat.ToolResult
 
@@ -250,8 +251,8 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 	vp.SetContent("")
 
 	s := spinner.New()
-	s.Spinner = spinner.Points
-	s.Style = theme.Help
+	s.Spinner = spinner.Spinner{Frames: theme.SpinnerFrames(), FPS: spinnerFPS}
+	s.Style = theme.Running
 
 	// Calculate max height - negative means percentage, positive means lines
 	maxH := height
@@ -1029,9 +1030,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
-		// Rotate status phase for animated messages
 		if m.loading {
-			m.statusPhase = (m.statusPhase + 1) % 12
 			m.updateViewport()
 		}
 	}
@@ -1384,7 +1383,7 @@ func (m Model) resolveApproval(resp chat.ToolCallResponse) (tea.Model, tea.Cmd) 
 	// the model re-thinking a step the user already decided.
 	m.reasoning = ""
 	m.loading = true
-	m.status = "Executing tool..."
+	m.status = theme.StatusRunning
 	m.updateViewport()
 	return m, func() tea.Msg {
 		m.toolResponseChan <- resp
@@ -1750,9 +1749,9 @@ func (m *Model) updateViewport() {
 	if m.loading {
 		displayStatus := m.status
 		if displayStatus == "" || displayStatus == "Thinking..." {
-			displayStatus = theme.Status(theme.VerbThinking, m.statusPhase)
+			displayStatus = theme.VerbThinking
 		}
-		sb.WriteString(theme.SepStyle.Render(theme.Sep) + " " + theme.Reasoning.Render(displayStatus))
+		sb.WriteString(m.spinner.View() + " " + theme.Reasoning.Render(displayStatus))
 		sb.WriteString("\n")
 		if m.reasoning != "" {
 			sb.WriteString(theme.ReasoningHeader() + "\n")

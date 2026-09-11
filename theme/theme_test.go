@@ -29,11 +29,33 @@ func TestGlyphsHaveNoEmoji(t *testing.T) {
 	}
 }
 
-func TestStatusGrowsDots(t *testing.T) {
-	want := map[int]string{0: "thinking", 1: "thinking.", 2: "thinking..", 3: "thinking…", 4: "thinking"}
-	for phase, exp := range want {
-		if got := theme.Status("thinking", phase); got != exp {
-			t.Errorf("Status(%d) = %q, want %q", phase, got, exp)
+func TestSpinnerFramesRespectRestrictedGlyphs(t *testing.T) {
+	t.Setenv("NIB_ASCII", "1")
+	for _, f := range theme.SpinnerFrames() {
+		for _, r := range f {
+			if r > 0xFF {
+				t.Errorf("restricted spinner frame %q contains non-Latin-1 rune %U", f, r)
+			}
+		}
+	}
+
+	t.Setenv("NIB_ASCII", "0")
+	full := theme.SpinnerFrames()
+	if len(full) < 2 {
+		t.Fatalf("unrestricted spinner needs multiple frames, got %d", len(full))
+	}
+}
+
+func TestSpinnerFramesAreUniformWidth(t *testing.T) {
+	// A frame that changes width makes the status line jitter on every tick.
+	for _, env := range []string{"0", "1"} {
+		t.Setenv("NIB_ASCII", env)
+		frames := theme.SpinnerFrames()
+		want := len([]rune(frames[0]))
+		for _, f := range frames {
+			if got := len([]rune(f)); got != want {
+				t.Errorf("NIB_ASCII=%s: frame %q width %d, want %d", env, f, got, want)
+			}
 		}
 	}
 }

@@ -36,6 +36,9 @@ const (
 	// carries the compact badge; the CLI prints the fuller notice at startup.
 	YoloBadge  = "yolo"
 	YoloNotice = "yolo — auto-approving every tool call (no prompts)"
+
+	// StatusRunning is shown between an approved tool call and its result.
+	StatusRunning = "running…"
 )
 
 // CLIApprovePrompt builds the line-based CLI approval prompt (the TUI uses
@@ -57,11 +60,4 @@ var EmptyExamples = []string{
 	"what changed in the last commit?",
 	"undo my last git commit",
 	"find every TODO in this repo",
-}
-
-// Status renders a verb with an animated trailing run of dots:
-// phase 0 → "thinking", 1 → "thinking.", 2 → "thinking..", 3 → "thinking…".
-func Status(verb string, phase int) string {
-	dots := []string{"", ".", "..", "…"}
-	return verb + dots[phase%len(dots)]
 }
