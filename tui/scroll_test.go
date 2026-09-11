@@ -147,3 +147,29 @@ func TestEndKeyJumpsToBottom(t *testing.T) {
 		}
 	}
 }
+
+// TestEndKeyRespectsComposerText guards the regression a reviewer caught: End
+// is bubbles/textarea's binding for line-end. Hijacking it unconditionally
+// would silently break cursor movement whenever the user is mid-message. With
+// text in the composer, End must reach the textarea (not jump the viewport)
+// and must not alter the composer's content.
+func TestEndKeyRespectsComposerText(t *testing.T) {
+	ta := textarea.New()
+	ta.Focus()
+	ta.SetValue("still typing")
+
+	m := Model{viewport: viewport.New(40, 4), width: 40, textarea: ta}
+	fillMessages(&m, 40)
+	m.updateViewport()
+	m.viewport.SetYOffset(0)
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	nm := next.(Model)
+
+	if nm.viewport.AtBottom() {
+		t.Error("End with a non-empty composer jumped the viewport instead of reaching the textarea")
+	}
+	if nm.textarea.Value() != "still typing" {
+		t.Errorf("End with a non-empty composer altered the composer content: got %q, want %q", nm.textarea.Value(), "still typing")
+	}
+}

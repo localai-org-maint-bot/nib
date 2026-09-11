@@ -543,8 +543,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.quit()
 
 		case tea.KeyEnd:
-			m.viewport.GotoBottom()
-			return m, nil
+			// Only jump when the composer is empty — bubbles' textarea binds End
+			// to line-end, and hijacking it unconditionally would break editing.
+			if strings.TrimSpace(m.textarea.Value()) == "" {
+				m.viewport.GotoBottom()
+				return m, nil
+			}
 
 		case tea.KeyCtrlY:
 			// Yank nib's last suggested command to the shell and exit, so the
