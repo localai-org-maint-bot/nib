@@ -58,6 +58,12 @@ type Model struct {
 	height    int
 	maxHeight int // Configured max height (0 = no limit)
 	loading   bool
+	// forceFollow makes the next updateViewport scroll to the bottom regardless
+	// of where the user had scrolled to. Set only by user-initiated actions
+	// (sending a message, answering an approval or a question) — passive
+	// re-renders keep respecting the reading position. One-shot: consumed by
+	// the render it applies to.
+	forceFollow bool
 	// interruptArmed is set after a first Ctrl+C interrupts an in-flight turn,
 	// so a second Ctrl+C exits instead of just re-interrupting. Reset when a new
 	// turn starts and when the turn ends.
@@ -536,6 +542,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyEsc:
 			return m.quit()
 
+		case tea.KeyEnd:
+			m.viewport.GotoBottom()
+			return m, nil
+
 		case tea.KeyCtrlY:
 			// Yank nib's last suggested command to the shell and exit, so the
 			// Ctrl+Space widget inserts it at the prompt. No-op if there's
@@ -662,7 +672,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pendingAsk = nil
 				m.loading = true
 				m.status = "Thinking…"
-				m.updateViewport()
+				m.updateViewportFollow()
 				m.askResponseChan <- answer
 				return m, nil
 			}
@@ -692,7 +702,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textarea.Reset()
 			m.completion.sync("")
 			cmd := m.dispatchInput(input)
-			m.updateViewport()
+			m.updateViewportFollow()
 			return m, cmd
 		}
 
@@ -1033,6 +1043,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.loading {
 			m.updateViewport()
 		}
+	}
+
+	// `G` jumps to the newest output, but only when it is not being typed into a
+	// message. vim-style, matching the ↑↓ scroll keys already advertised.
+	if k, ok := msg.(tea.KeyMsg); ok && k.Type == tea.KeyRunes && len(k.Runes) == 1 &&
+		k.Runes[0] == 'G' && strings.TrimSpace(m.textarea.Value()) == "" {
+		m.viewport.GotoBottom()
+		return m, tea.Batch(cmds...)
 	}
 
 	// Update textarea. The composer is always editable — even while a run is in
@@ -1384,7 +1402,7 @@ func (m Model) resolveApproval(resp chat.ToolCallResponse) (tea.Model, tea.Cmd) 
 	m.reasoning = ""
 	m.loading = true
 	m.status = theme.StatusRunning
-	m.updateViewport()
+	m.updateViewportFollow()
 	return m, func() tea.Msg {
 		m.toolResponseChan <- resp
 		return nil
@@ -1602,6 +1620,14 @@ func (m *Model) sameAgentMsg(idx int, agentID string) bool {
 	return x.Role == "agent" || x.Role == "agent_tool" || x.Role == "agent_result"
 }
 
+// updateViewportFollow re-renders and pins the viewport to the bottom. Use it
+// for user-initiated updates, where the user is waiting on new output and being
+// left in scrollback reads as nothing having happened.
+func (m *Model) updateViewportFollow() {
+	m.forceFollow = true
+	m.updateViewport()
+}
+
 func (m *Model) updateViewport() {
 	var sb strings.Builder
 
@@ -1813,7 +1839,8 @@ func (m *Model) updateViewport() {
 	// Preserve the user's scroll position: only follow to the bottom when they
 	// were already there. Otherwise a re-render (spinner tick, status update,
 	// streamed token) would yank them back down while they're reading history.
-	wasAtBottom := m.viewport.AtBottom()
+	wasAtBottom := m.viewport.AtBottom() || m.forceFollow
+	m.forceFollow = false
 	offset := m.viewport.YOffset
 	m.viewport.SetContent(sb.String())
 	if wasAtBottom {

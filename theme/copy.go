@@ -4,7 +4,7 @@ package theme
 const (
 	BrandName = "nib"
 
-	HelpDefault      = "enter send · ctrl+y use command · esc exit"
+	HelpDefault      = "enter send · ctrl+y use command · G newest · esc exit"
 	HelpApproval     = "1 once · 2 always · 3 this turn · n no · e edit · esc deny"
 	HelpApprovalEdit = "enter submit · esc cancel"
 	ApproveEditHint  = "describe the change · enter submit · esc cancel"

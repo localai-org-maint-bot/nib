@@ -96,3 +96,54 @@ func TestResizeRewrapsAndClamps(t *testing.T) {
 		t.Errorf("scroll offset %d stranded past content (%d lines)", nm.viewport.YOffset, narrow)
 	}
 }
+
+// TestUpdateViewportFollowSnapsToBottom covers the reported bug: the user
+// scrolls up to re-read history, sends a message, and the reply streams in below
+// the fold because the preserve-scroll guard saw wasAtBottom == false.
+func TestUpdateViewportFollowSnapsToBottom(t *testing.T) {
+	m := Model{viewport: viewport.New(40, 4), width: 40}
+	fillMessages(&m, 40)
+	m.updateViewport()
+	m.viewport.SetYOffset(0)
+
+	m.messages = append(m.messages, ChatMessage{Role: "user", Content: "a new question"})
+	m.updateViewportFollow()
+
+	if !m.viewport.AtBottom() {
+		t.Fatal("a user-initiated update must follow to the bottom even when scrolled up")
+	}
+}
+
+// TestForceFollowIsOneShot ensures the flag does not pin the viewport to the
+// bottom forever — the next passive re-render must respect the user's scroll.
+func TestForceFollowIsOneShot(t *testing.T) {
+	m := Model{viewport: viewport.New(40, 4), width: 40}
+	fillMessages(&m, 40)
+	m.updateViewportFollow()
+
+	m.viewport.SetYOffset(0)
+	m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "streamed"})
+	m.updateViewport()
+
+	if m.viewport.YOffset != 0 {
+		t.Fatalf("passive re-render after a forced follow moved the viewport: YOffset = %d, want 0", m.viewport.YOffset)
+	}
+}
+
+// TestEndKeyJumpsToBottom gives the user a way back once they are scrolled up.
+func TestEndKeyJumpsToBottom(t *testing.T) {
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyEnd},
+		{Type: tea.KeyRunes, Runes: []rune{'G'}},
+	} {
+		m := Model{viewport: viewport.New(40, 4), width: 40, textarea: textarea.New()}
+		fillMessages(&m, 40)
+		m.updateViewport()
+		m.viewport.SetYOffset(0)
+
+		next, _ := m.Update(key)
+		if !next.(Model).viewport.AtBottom() {
+			t.Errorf("key %v did not jump to the bottom", key)
+		}
+	}
+}
