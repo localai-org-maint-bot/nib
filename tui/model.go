@@ -96,7 +96,16 @@ type Model struct {
 	// syncLayout compares this against the current answer and re-budgets when
 	// they differ — a WindowSizeMsg is not the only thing that changes it.
 	footerBudget int
-	loading      bool
+	// footerCache memoizes the last rendered Footer string, so the two call
+	// sites that need it for the same frame — syncLayout's height budget
+	// (needed before body can be laid out) and View's own frame composition
+	// (needed after) — render it once between them instead of twice on every
+	// spinner tick. See renderFooter. It lives behind a pointer for the same
+	// reason msgViewCache does: View is a value-receiver method, but every
+	// copy of Model shares this pointee. nil on a bare Model{} literal, which
+	// renderFooter falls back to an uncached render for.
+	footerCache *footerCache
+	loading     bool
 	// forceFollow makes the next updateViewport scroll to the bottom regardless
 	// of where the user had scrolled to. Set only by user-initiated actions
 	// (sending a message, answering an approval or a question) — passive
@@ -312,6 +321,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		spinner:          s,
 		presenter:        p,
 		msgViewCache:     &messageProjCache{rev: -1},
+		footerCache:      &footerCache{},
 		messages:         []ChatMessage{},
 		ctx:              ctx,
 		cancel:           cancel,
@@ -1475,9 +1485,81 @@ func (m *Model) updateDimensions() {
 	m.applyDimensions(m.footerHeight(m.viewState()))
 }
 
-// footerHeight asks the presenter how tall its footer is for this frame.
+// footerHeight asks how tall the footer is for this frame, via renderFooter
+// so this and the frame's eventual Footer text (rendered later, in View) come
+// from the same cached render rather than each paying for their own.
 func (m Model) footerHeight(vs render.ViewState) int {
-	return m.presenter.FooterHeight(vs, m.width)
+	return lipgloss.Height(m.renderFooter(vs, m.width))
+}
+
+// footerCache is renderFooter's memo: the fields Footer actually reads from a
+// ViewState (see render.Presenter.Footer), plus the width, and the string
+// that produced. A ViewState carries plenty Footer never looks at —
+// Messages, Reasoning, Dialogs — so keying on those exact fields means an
+// unrelated change (a streamed token, a reasoning trace update) leaves the
+// cache valid, while anything that would actually change Footer's output
+// invalidates it correctly. Footers is flattened to a string because
+// []render.FooterRow isn't comparable with ==; FooterRow's own fields are all
+// plain strings/ints, so joining them with NUL separators can't collide two
+// distinct row lists onto the same key.
+type footerCache struct {
+	valid             bool
+	width             int
+	help, badges, err string
+	newOutput         bool
+	footers           string
+	rendered          string
+}
+
+// footerCacheKey builds the comparable snapshot of v's Footer-relevant
+// fields at width w.
+func footerCacheKey(v render.ViewState, w int) footerCache {
+	var rows strings.Builder
+	for _, r := range v.Footers {
+		fmt.Fprintf(&rows, "%d\x00%s\x00%s\x00", r.Kind, r.Glyph, r.Text)
+	}
+	return footerCache{
+		width:     w,
+		help:      v.Help,
+		badges:    v.Badges,
+		err:       v.Err,
+		newOutput: v.NewOutput,
+		footers:   rows.String(),
+	}
+}
+
+// renderFooter returns Presenter.Footer(v, w), reusing the model's cached
+// string when v's footer-relevant fields and w exactly match what produced
+// it. Footer is a pure function of exactly those fields, so a key match
+// proves the cached string is still exactly what a fresh call would return.
+// Without this, syncLayout's height budget (which must run before body can
+// be laid out, since the viewport's height depends on it) and View's own
+// frame composition (which needs the footer's actual text) each rendered
+// Footer themselves — twice per frame, on every spinner tick while loading
+// (~80ms) — this is Task 10a's third carried defect.
+//
+// footerCache lives behind a pointer (see the Model field comment), so this
+// value-receiver method can still update it in place; on a bare Model{}
+// literal (footerCache nil, as in tests that skip newTestModel) it falls back
+// to an uncached render, matching msgViewCache's nil-safety precedent.
+func (m Model) renderFooter(v render.ViewState, w int) string {
+	key := footerCacheKey(v, w)
+	if m.footerCache != nil && m.footerCache.valid &&
+		key.width == m.footerCache.width &&
+		key.help == m.footerCache.help &&
+		key.badges == m.footerCache.badges &&
+		key.err == m.footerCache.err &&
+		key.newOutput == m.footerCache.newOutput &&
+		key.footers == m.footerCache.footers {
+		return m.footerCache.rendered
+	}
+	rendered := m.presenter.Footer(v, w)
+	if m.footerCache != nil {
+		key.rendered = rendered
+		key.valid = true
+		*m.footerCache = key
+	}
+	return rendered
 }
 
 // syncLayout re-budgets the viewport when the footer's height has changed
@@ -1992,58 +2074,61 @@ func (m Model) View() string {
 	// itself.
 	vs := m.viewState()
 
-	var sb strings.Builder
-
 	// Header: brand (plus a yolo badge when the approval gate is off) left,
 	// cwd right, one dim hairline beneath.
-	sb.WriteString(presenter.Header(vs))
+	header := presenter.Header(vs)
 
 	// Body: log viewer, first-run empty state, otherwise the conversation viewport.
-	if m.showLogs {
-		sb.WriteString(m.renderLogsViewer())
-	} else if !m.showingViewport() {
-		sb.WriteString(renderEmptyState(m.width))
-	} else {
-		sb.WriteString(m.viewport.View())
+	var body string
+	switch {
+	case m.showLogs:
+		body = m.renderLogsViewer()
+	case !m.showingViewport():
+		body = renderEmptyState(m.width)
+	default:
+		body = m.viewport.View()
 	}
-	sb.WriteString("\n")
 
-	// `/` completion popup, above the input.
+	// Composer: everything that sits between the body and the footer this
+	// frame — the `/` completion popup, the pending-message queue, and the
+	// input line (or the not-ready notice, or nothing at all in the modes
+	// where the viewport's own approval block carries the choice row).
+	var composer strings.Builder
 	if comp := renderCompletion(m.completion, strings.TrimSpace(m.textarea.Value()), m.width); comp != "" {
-		sb.WriteString(comp)
-		sb.WriteString("\n")
+		composer.WriteString(comp)
+		composer.WriteString("\n")
 	}
-
-	// Pending message queue, above the input. Selection only matters when the
-	// composer is empty (that's when up/down navigate it).
+	// Selection only matters when the composer is empty (that's when up/down
+	// navigate the queue).
 	if q := renderQueue(m.queue, m.queueSel, m.width); q != "" {
-		sb.WriteString(q)
-		sb.WriteString("\n")
+		composer.WriteString(q)
+		composer.WriteString("\n")
 	}
-
-	// Input. In key-driven approval choice mode the textarea is hidden (the
-	// approval block in the viewport carries the choice row); edit mode and
-	// normal chat show the textarea.
 	switch {
 	case !m.sessionReady:
-		sb.WriteString(theme.Help.Render(theme.Starting))
+		composer.WriteString(theme.Help.Render(theme.Starting))
 	case m.showLogs:
 		// no input: the log viewer owns the body and the keystrokes
 	case m.awaitingApproval && !m.approvalEditing:
 		// no input: choice row lives in the viewport approval block
 	default:
-		sb.WriteString(m.textarea.View())
+		composer.WriteString(m.textarea.View())
 	}
-	sb.WriteString("\n")
 
 	// Footer: new-output marker (scroll-position signal — content arrived below
 	// the fold while the user was reading history), help/badges line, error
 	// line, and the job-status footer rows. All of it already on vs — the same
 	// value Header rendered from, and the same one updateDimensions budgeted
-	// the viewport's height against.
-	sb.WriteString(presenter.Footer(vs, m.width))
+	// the viewport's height against. renderFooter reuses syncLayout's render
+	// of this same vs when nothing footer-relevant changed since, rather than
+	// paying for a second Footer call every frame.
+	footer := m.renderFooter(vs, m.width)
 
-	return sb.String()
+	// Frame is the whole-screen composition point: it places header, body,
+	// composer and footer relative to one another. Inline (and full, for now)
+	// simply stack them in this same order; a surface that owns the whole
+	// screen can do more once there's a dialog worth overlaying (Task 11).
+	return presenter.Frame(vs, header, body, composer.String(), footer, m.width, m.height)
 }
 
 // helpLine returns the context-appropriate help string.
