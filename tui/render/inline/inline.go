@@ -57,6 +57,43 @@ func styledLines(style lipgloss.Style, content string) string {
 	return strings.Join(lines, "\n")
 }
 
+// contentPrefix returns the chrome this surface puts before a role's content:
+// the label or gutter Message writes on the first line and indents the
+// continuation lines to. Message and ContentWidth both read it, so the width
+// the model pre-renders markdown at can never drift from the width this
+// surface's chrome actually leaves — the model asks (ContentWidth) instead of
+// reconstructing the prefix string itself.
+func contentPrefix(role render.Role) string {
+	switch role {
+	case render.RoleUser:
+		return theme.LabelYou.Render(theme.LabelYouText) + " " + theme.SepStyle.Render(theme.Sep) + " "
+	case render.RoleAssistant:
+		return theme.LabelNib.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep) + " "
+	case render.RoleAgent:
+		return theme.Subtle.Render(theme.SubAgent) + " "
+	case render.RoleTool:
+		// A tool block's body is indented two cells beneath its own header line.
+		return "  "
+	case render.RoleError:
+		return theme.Error.Render(theme.Cross) + " "
+	}
+	return ""
+}
+
+// ContentWidth reports how many cells are left for a role's content once this
+// surface's chrome is accounted for. The model calls it to pre-render
+// width-cached markdown (glamour) at the width this presenter will actually
+// leave, instead of hard-coding one surface's prefix for both. The result is
+// clamped to at least 1: a terminal narrower than the chrome must still give
+// a renderer a legal width rather than zero or a negative one.
+func (presenter) ContentWidth(role render.Role, w int) int {
+	cw := w - lipgloss.Width(contentPrefix(role))
+	if cw < 1 {
+		cw = 1
+	}
+	return cw
+}
+
 // Message renders one chat entry, including the trailing blank-line separator
 // before the next entry. assistant/agent content arrives already
 // markdown-rendered (and wrapped) by the model — glamour is width-cached state
@@ -82,17 +119,15 @@ func (presenter) Message(m render.Message, prev render.Role, w int) string {
 	var body string
 	switch m.Role {
 	case render.RoleUser:
-		prefix := theme.LabelYou.Render(theme.LabelYouText) + " " + theme.SepStyle.Render(theme.Sep) + " "
+		prefix := contentPrefix(render.RoleUser)
 		wrapped := render.Wrap(m.Content, w-lipgloss.Width(prefix))
 		body = prefixed(prefix, wrapped)
 
 	case render.RoleAssistant:
-		prefix := theme.LabelNib.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep) + " "
-		body = prefixed(prefix, m.Content)
+		body = prefixed(contentPrefix(render.RoleAssistant), m.Content)
 
 	case render.RoleAgent:
-		prefix := theme.Subtle.Render(theme.SubAgent) + " "
-		body = prefixed(prefix, styledLines(theme.Subtle, m.Content))
+		body = prefixed(contentPrefix(render.RoleAgent), styledLines(theme.Subtle, m.Content))
 		if m.HugNext {
 			return body
 		}
@@ -105,18 +140,19 @@ func (presenter) Message(m render.Message, prev render.Role, w int) string {
 		if m.AgentID != "" {
 			label = theme.SubAgent + " " + render.ShortID(m.AgentID) + " · " + label
 		}
+		indent := contentPrefix(render.RoleTool)
 		var b strings.Builder
 		b.WriteString(theme.Subtle.Render(theme.Sep + " " + label))
 		b.WriteString("\n")
-		wrapped := render.Wrap(m.Content, w-2)
+		wrapped := render.Wrap(m.Content, w-lipgloss.Width(indent))
 		for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
-			b.WriteString("  " + theme.Help.Render(line))
+			b.WriteString(indent + theme.Help.Render(line))
 			b.WriteString("\n")
 		}
 		body = b.String()
 
 	case render.RoleError:
-		prefix := theme.Error.Render(theme.Cross) + " "
+		prefix := contentPrefix(render.RoleError)
 		wrapped := render.Wrap(m.Content, w-lipgloss.Width(prefix))
 		body = prefixed(prefix, wrapped)
 

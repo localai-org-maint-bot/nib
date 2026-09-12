@@ -1803,13 +1803,13 @@ func (m *Model) updateViewport() {
 			// Markdown is width-cached model state (glamour), not something a
 			// Presenter owns — pre-render it here at the width the presenter's
 			// prefix will leave for content, matching its own prefix exactly.
-			prefixWidth := lipgloss.Width(assistantStyle.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep) + " ")
-			rendered := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
+			mdWidth := presenter.ContentWidth(render.RoleAssistant, contentWidth)
+			rendered := renderMarkdownWith(m.markdownFor(mdWidth), msg.Content, mdWidth)
 			sb.WriteString(presenter.Message(render.Message{Role: render.RoleAssistant, Content: rendered}, prevRole, contentWidth))
 			prevRole = render.RoleAssistant
 		case "agent":
-			prefixWidth := lipgloss.Width(theme.Subtle.Render(theme.SubAgent) + " ")
-			rendered := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
+			mdWidth := presenter.ContentWidth(render.RoleAgent, contentWidth)
+			rendered := renderMarkdownWith(m.markdownFor(mdWidth), msg.Content, mdWidth)
 			sb.WriteString(presenter.Message(render.Message{
 				Role:    render.RoleAgent,
 				Content: rendered,
