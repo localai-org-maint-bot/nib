@@ -23,7 +23,7 @@ func TestNoEmojiInRenderHelpers(t *testing.T) {
 	// The ask_user dialog: question + options, rendered through the presenter
 	// (buildAskDialog replaced the old renderAsk plain-text block).
 	req := chat.AskRequest{Question: "Pick one", Options: []string{"alpha", "beta"}}
-	ask := testPresenter().Dialog(buildAskDialog(req, &render.SelectList{Items: req.Options}), 80)
+	ask := testPresenter().Dialog(buildAskDialog(req, &render.SelectList{Items: req.Options}, false), 80)
 	if containsEmoji(ask) {
 		t.Fatalf("ask dialog output contains emoji: %q", ask)
 	}

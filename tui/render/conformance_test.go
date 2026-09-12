@@ -764,39 +764,115 @@ func TestFrameStructuralEquivalence(t *testing.T) {
 	assertSameFingerprint(t, fps)
 }
 
+// dialogLine returns the first line of out that contains text, or "" if none
+// does. Shared by the selection- and check-marking conformance tests below.
+func dialogLine(out, text string) string {
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, text) {
+			return l
+		}
+	}
+	return ""
+}
+
 // TestAllPresentersMarkDialogSelection: the selected option must be visually
-// distinguishable in every surface, however each one chooses to mark it.
-// Moved here from Phase 2 Task 7 by controller ruling: it asserts behaviour
-// that only exists once Phase 3 Task 11 (the ask_user dialog) lands.
+// distinguishable in every surface, however each one chooses to mark it — and
+// the mark must track Selected, not a fixed row. Moved here from Phase 2 Task
+// 7 by controller ruling: it asserts behaviour that only exists once Phase 3
+// Task 11 (the ask_user dialog) lands.
+//
+// The first half (Selected: 1) only proves SOME difference exists between a
+// selected and an unselected line, which a presenter that hardcoded
+// `i == 0` instead of `i == d.Selected` would also pass (0 happens to differ
+// from 1). The second half closes that gap: it re-renders the same three
+// options with Selected moved to 0 and then to 2, and checks that alpha's OWN
+// line and gamma's OWN line each change between those two renders. A
+// presenter that always marks row 0 regardless of Selected would render
+// alpha's line identically both times (always marked) and gamma's line
+// identically both times (never marked) — this is what would fail.
 func TestAllPresentersMarkDialogSelection(t *testing.T) {
+	dialogWith := func(selected int) render.Dialog {
+		return render.Dialog{
+			Kind:  render.DialogAsk,
+			Title: "pick one",
+			// Options is []render.DialogOption{Text, Emphasis} — the explicit shape
+			// adopted in Phase 2 Task 6's fix round, replacing positional styling.
+			Options: []render.DialogOption{
+				{Text: "alpha"}, {Text: "beta"}, {Text: "gamma"},
+			},
+			Selected: selected,
+		}
+	}
+	for name, p := range presenters() {
+		t.Run(name, func(t *testing.T) {
+			out1 := p.Dialog(dialogWith(1), 80)
+			alpha1, beta1, gamma1 := dialogLine(out1, "alpha"), dialogLine(out1, "beta"), dialogLine(out1, "gamma")
+			if alpha1 == "" || beta1 == "" || gamma1 == "" {
+				t.Fatalf("%s did not render all options: %q", name, out1)
+			}
+			if beta1 == strings.Replace(alpha1, "alpha", "beta", 1) {
+				t.Errorf("%s renders the selected option identically to an unselected one: %q", name, beta1)
+			}
+
+			out0 := p.Dialog(dialogWith(0), 80)
+			out2 := p.Dialog(dialogWith(2), 80)
+			alpha0, gamma0 := dialogLine(out0, "alpha"), dialogLine(out0, "gamma")
+			alpha2, gamma2 := dialogLine(out2, "alpha"), dialogLine(out2, "gamma")
+			if alpha0 == "" || gamma0 == "" || alpha2 == "" || gamma2 == "" {
+				t.Fatalf("%s did not render all options at every Selected: Selected=0: %q, Selected=2: %q", name, out0, out2)
+			}
+			if alpha0 == alpha2 {
+				t.Errorf("%s renders alpha's row identically whether Selected is 0 or 2 — the mark is not tracking Selected: %q", name, alpha0)
+			}
+			if gamma0 == gamma2 {
+				t.Errorf("%s renders gamma's row identically whether Selected is 0 or 2 — the mark is not tracking Selected: %q", name, gamma0)
+			}
+		})
+	}
+}
+
+// TestAllPresentersRenderMultiSelectChecks: a Dialog with Checked must show
+// which options are ticked on every surface. This is the only fixture in the
+// whole conformance suite that sets Checked — without it, a presenter's
+// checkbox-glyph path (as opposed to its radio path) has no coverage on
+// `full` at all: tui/ask_test.go's multi-select assertions run only against
+// `inline` (testPresenter() is hard-wired to inline.New()).
+func TestAllPresentersRenderMultiSelectChecks(t *testing.T) {
 	d := render.Dialog{
 		Kind:  render.DialogAsk,
-		Title: "pick one",
-		// Options is []render.DialogOption{Text, Emphasis} — the explicit shape
-		// adopted in Phase 2 Task 6's fix round, replacing positional styling.
+		Title: "pick some",
 		Options: []render.DialogOption{
-			{Text: "alpha"}, {Text: "beta"}, {Text: "gamma"},
+			{Text: "red"}, {Text: "green"}, {Text: "blue"},
 		},
-		Selected: 1,
+		Checked: []bool{true, false, true},
+		// Selected is deliberately out of range (Dialog's own zero value, 0,
+		// would coincide with "red" at index 0 and add a cursor mark that
+		// "blue" doesn't get, confounding the checked-vs-checked comparison
+		// below with an unrelated Selected difference).
+		Selected: -1,
 	}
 	for name, p := range presenters() {
 		t.Run(name, func(t *testing.T) {
 			out := p.Dialog(d, 80)
-			lines := strings.Split(out, "\n")
-			var betaLine, alphaLine string
-			for _, l := range lines {
-				if strings.Contains(l, "beta") {
-					betaLine = l
-				}
-				if strings.Contains(l, "alpha") {
-					alphaLine = l
-				}
-			}
-			if betaLine == "" || alphaLine == "" {
+			redLine, greenLine, blueLine := dialogLine(out, "red"), dialogLine(out, "green"), dialogLine(out, "blue")
+			if redLine == "" || greenLine == "" || blueLine == "" {
 				t.Fatalf("%s did not render all options: %q", name, out)
 			}
-			if betaLine == strings.Replace(alphaLine, "alpha", "beta", 1) {
-				t.Errorf("%s renders the selected option identically to an unselected one: %q", name, betaLine)
+			// A checked row's own line must look different from an unchecked
+			// one — not merely different text — same discriminator
+			// TestAllPresentersMarkDialogSelection uses for Selected.
+			if redLine == strings.Replace(greenLine, "green", "red", 1) {
+				t.Errorf("%s renders a checked option identically to an unchecked one: %q", name, redLine)
+			}
+			if blueLine == strings.Replace(greenLine, "green", "blue", 1) {
+				t.Errorf("%s renders a checked option identically to an unchecked one: %q", name, blueLine)
+			}
+			// red and blue are both checked and neither is Selected (the zero
+			// value): their glyph should read the same, so this catches a
+			// presenter whose mark happens to differ by position rather than
+			// by Checked[i].
+			if redLine != strings.Replace(blueLine, "blue", "red", 1) {
+				t.Errorf("%s renders two checked options differently from each other: %q vs %q", name, redLine, blueLine)
 			}
 		})
 	}

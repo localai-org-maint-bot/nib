@@ -1945,7 +1945,7 @@ func (m Model) currentDialogs() []render.Dialog {
 	// Guarded the same way as the approval branch above: buildAskDialog
 	// actually runs only when a question is pending, not on every frame.
 	if m.awaitingAsk && m.pendingAsk != nil {
-		dialogs = append(dialogs, buildAskDialog(*m.pendingAsk, m.askList))
+		dialogs = append(dialogs, buildAskDialog(*m.pendingAsk, m.askList, m.awaitingApproval))
 	}
 	return dialogs
 }

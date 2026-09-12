@@ -65,6 +65,13 @@ const (
 	AskHintSingleSelect = "up/down move · enter pick · or type your own answer"
 	AskHintMultiSelect  = "up/down move · space toggle · enter confirm · or type your own answer"
 	AskHintFreeText     = "type your answer"
+
+	// AskBlockedByApproval replaces the ask dialog's normal hint when a tool
+	// approval is also pending: the approval's key-driven choice mode swallows
+	// every keypress (arrows, space, typed text) except its own, so none of
+	// the usual ask-dialog affordances actually do anything until it resolves
+	// — a silent dead end without this note.
+	AskBlockedByApproval = "waiting on the tool approval above — resolve that first"
 )
 
 // ReasoningMaxLines is how many trailing lines a collapsed reasoning box

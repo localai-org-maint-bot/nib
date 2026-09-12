@@ -25,22 +25,37 @@ import (
 // decides which Options make it into the Dialog: Dialog itself carries no
 // MaxVisible, so the windowing has to happen here, at the one call site that
 // holds both the full item list and the visible-rows budget.
-func buildAskDialog(req chat.AskRequest, list *render.SelectList) render.Dialog {
+//
+// blockedByApproval is true when a tool approval is ALSO pending
+// (Model.awaitingApproval) — cogito can propagate the tool-call callback into
+// a background sub-agent while the root agent is independently blocked on
+// ask_user (see currentDialogs in tui/model.go), and the approval's own
+// key-driven choice mode swallows every keypress but its own (arrows, space,
+// typed text included) until it resolves. Without this, the ask dialog shows
+// arrows and a "type your own answer" hint that silently do nothing — exactly
+// the confusing dead end this whole task exists to remove. When true, it
+// overrides the normal per-mode hint with theme.AskBlockedByApproval instead
+// of a hint describing affordances that don't currently work.
+func buildAskDialog(req chat.AskRequest, list *render.SelectList, blockedByApproval bool) render.Dialog {
 	d := render.Dialog{Kind: render.DialogAsk, Title: req.Question}
-	if list == nil || len(list.Items) == 0 {
+	switch {
+	case list == nil || len(list.Items) == 0:
 		d.Hint = theme.AskHintFreeText
-		return d
+	default:
+		start, end := list.Window()
+		for i := start; i < end; i++ {
+			d.Options = append(d.Options, render.DialogOption{Text: list.Items[i]})
+		}
+		d.Selected = list.Selected - start
+		if list.MultiSelect {
+			d.Checked = append([]bool(nil), list.Checked[start:end]...)
+			d.Hint = theme.AskHintMultiSelect
+		} else {
+			d.Hint = theme.AskHintSingleSelect
+		}
 	}
-	start, end := list.Window()
-	for i := start; i < end; i++ {
-		d.Options = append(d.Options, render.DialogOption{Text: list.Items[i]})
-	}
-	d.Selected = list.Selected - start
-	if list.MultiSelect {
-		d.Checked = append([]bool(nil), list.Checked[start:end]...)
-		d.Hint = theme.AskHintMultiSelect
-	} else {
-		d.Hint = theme.AskHintSingleSelect
+	if blockedByApproval {
+		d.Hint = theme.AskBlockedByApproval
 	}
 	return d
 }
