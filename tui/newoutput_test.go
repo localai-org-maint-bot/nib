@@ -14,7 +14,7 @@ import (
 // Without it the preserve-scroll behaviour is silent — a reply lands and
 // nothing tells the reader it happened.
 func TestNewOutputMarkerShowsWhenScrolledUp(t *testing.T) {
-	m := Model{viewport: viewport.New(40, 4), textarea: textarea.New(), width: 40, height: 24}
+	m := newTestModel(Model{viewport: viewport.New(40, 4), textarea: textarea.New(), width: 40, height: 24})
 	fillMessages(&m, 40)
 	m.updateViewport()
 	m.viewport.SetYOffset(0)
@@ -32,7 +32,7 @@ func TestNewOutputMarkerShowsWhenScrolledUp(t *testing.T) {
 // user is caught back up — otherwise it would be permanent noise rather than
 // a signal.
 func TestNewOutputMarkerHiddenAtBottom(t *testing.T) {
-	m := Model{viewport: viewport.New(40, 4), textarea: textarea.New(), width: 40, height: 24}
+	m := newTestModel(Model{viewport: viewport.New(40, 4), textarea: textarea.New(), width: 40, height: 24})
 	fillMessages(&m, 40)
 	m.updateViewport()
 	m.viewport.GotoBottom()

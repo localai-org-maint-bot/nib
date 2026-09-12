@@ -18,14 +18,14 @@ import (
 func newLoopTestModel() Model {
 	ta := textarea.New()
 	ta.Focus()
-	return Model{
+	return newTestModel(Model{
 		textarea:     ta,
 		viewport:     viewport.New(80, 10),
 		spinner:      spinner.New(),
 		session:      &chat.Session{}, // RunLive()==false → idle branch
 		sessionReady: true,
 		loops:        loop.NewRegistry(),
-	}
+	})
 }
 
 func TestStopLoopAll(t *testing.T) {

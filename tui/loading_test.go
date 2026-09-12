@@ -17,12 +17,12 @@ func TestLoadingBlockRendersSpinner(t *testing.T) {
 	s := spinner.New()
 	s.Spinner = spinner.Spinner{Frames: theme.SpinnerFrames(), FPS: spinnerFPS}
 
-	m := Model{
+	m := newTestModel(Model{
 		viewport: viewport.New(80, 10),
 		width:    80,
 		spinner:  s,
 		loading:  true,
-	}
+	})
 	m.updateViewport()
 
 	out := m.viewport.View()

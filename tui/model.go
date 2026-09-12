@@ -26,7 +26,6 @@ import (
 	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/tui/render"
-	"github.com/mudler/nib/tui/render/inline"
 )
 
 // ChatMessage represents a message in the chat history
@@ -57,9 +56,10 @@ type Model struct {
 	spinner  spinner.Model
 
 	// presenter renders every block. Chosen once at construction from the run
-	// mode; the model never branches on mode itself. May be nil on a Model
-	// built as a bare struct literal (as many tests do) — updateViewport and
-	// View fall back to inline.New() in that case.
+	// mode; the model never branches on mode itself. Every production path
+	// (NewModel, always called with a Presenter from app.go) sets it; a test
+	// that builds a Model directly must go through newTestModel so this is
+	// never nil when updateViewport or View run.
 	presenter render.Presenter
 	// msgViewCache caches the []render.Message projection of messages built for
 	// ViewState.Messages, so View (called on every spinner tick) doesn't
@@ -1577,18 +1577,6 @@ func (m *Model) updateViewportFollow() {
 	m.updateViewport()
 }
 
-// renderer returns the active Presenter. It falls back to inline.New() only
-// for a Model built as a bare struct literal (as many tests do, bypassing
-// NewModel, which always sets presenter) — a real run never reaches the
-// fallback. This is the one place that guard lives; updateViewport and View
-// both call it rather than each carrying their own copy of the nil check.
-func (m Model) renderer() render.Presenter {
-	if m.presenter != nil {
-		return m.presenter
-	}
-	return inline.New()
-}
-
 // roleOf maps a ChatMessage's string Role to a render.Role. agent_tool and
 // agent_result — the sub-agent thread-run lines, always rendered directly by
 // renderAgentThreadRun rather than through Presenter.Message — have no
@@ -1744,7 +1732,7 @@ func (m Model) viewState() render.ViewState {
 func (m *Model) updateViewport() {
 	var sb strings.Builder
 
-	presenter := m.renderer()
+	presenter := m.presenter
 
 	// Calculate available width for content (use viewport width, not terminal width)
 	contentWidth := m.viewport.Width
@@ -1862,7 +1850,7 @@ func (m Model) View() string {
 		return ""
 	}
 
-	presenter := m.renderer()
+	presenter := m.presenter
 	vs := m.viewState()
 
 	var sb strings.Builder

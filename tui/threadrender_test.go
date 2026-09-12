@@ -10,7 +10,7 @@ import (
 )
 
 func renderMsgs(msgs []ChatMessage) string {
-	m := Model{viewport: viewport.New(80, 40)}
+	m := newTestModel(Model{viewport: viewport.New(80, 40)})
 	m.jobs = []agentJob{{ID: "a1", Type: "explore"}, {ID: "a2", Type: "review"}}
 	m.messages = msgs
 	m.updateViewport()

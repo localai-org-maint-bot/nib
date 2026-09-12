@@ -18,7 +18,7 @@ func fillMessages(m *Model, n int) {
 }
 
 func TestUpdateViewportPreservesScrollWhenNotAtBottom(t *testing.T) {
-	m := Model{viewport: viewport.New(40, 4), width: 40}
+	m := newTestModel(Model{viewport: viewport.New(40, 4), width: 40})
 	fillMessages(&m, 40)
 	m.updateViewport()
 	if !m.viewport.AtBottom() {
@@ -45,7 +45,7 @@ func TestUpdateViewportPreservesScrollWhenNotAtBottom(t *testing.T) {
 }
 
 func TestUpdateViewportFollowsWhenAtBottom(t *testing.T) {
-	m := Model{viewport: viewport.New(40, 4), width: 40}
+	m := newTestModel(Model{viewport: viewport.New(40, 4), width: 40})
 	fillMessages(&m, 40)
 	m.updateViewport()
 	m.viewport.GotoBottom()
@@ -64,12 +64,12 @@ func TestUpdateViewportFollowsWhenAtBottom(t *testing.T) {
 // TestResizeRewrapsAndClamps verifies a window resize re-renders at the new
 // width and leaves the scroll offset inside the new content bounds.
 func TestResizeRewrapsAndClamps(t *testing.T) {
-	m := Model{
+	m := newTestModel(Model{
 		viewport: viewport.New(80, 10),
 		textarea: textarea.New(),
 		width:    80,
 		height:   24,
-	}
+	})
 	// One long message so the wrap width visibly changes the line count.
 	m.messages = append(m.messages, ChatMessage{
 		Role:    "assistant",
@@ -103,12 +103,12 @@ func TestResizeRewrapsAndClamps(t *testing.T) {
 // bottom could read as scrolled-up the moment the terminal shrank and get
 // stranded in scrollback.
 func TestResizeAtBottomStaysFollowing(t *testing.T) {
-	m := Model{
+	m := newTestModel(Model{
 		viewport: viewport.New(80, 10),
 		textarea: textarea.New(),
 		width:    80,
 		height:   24,
-	}
+	})
 	for i := 0; i < 60; i++ {
 		m.messages = append(m.messages, ChatMessage{Role: "user", Content: "history line"})
 	}
@@ -130,7 +130,7 @@ func TestResizeAtBottomStaysFollowing(t *testing.T) {
 // scrolls up to re-read history, sends a message, and the reply streams in below
 // the fold because the preserve-scroll guard saw wasAtBottom == false.
 func TestUpdateViewportFollowSnapsToBottom(t *testing.T) {
-	m := Model{viewport: viewport.New(40, 4), width: 40}
+	m := newTestModel(Model{viewport: viewport.New(40, 4), width: 40})
 	fillMessages(&m, 40)
 	m.updateViewport()
 	m.viewport.SetYOffset(0)
@@ -146,7 +146,7 @@ func TestUpdateViewportFollowSnapsToBottom(t *testing.T) {
 // TestForceFollowIsOneShot ensures the flag does not pin the viewport to the
 // bottom forever — the next passive re-render must respect the user's scroll.
 func TestForceFollowIsOneShot(t *testing.T) {
-	m := Model{viewport: viewport.New(40, 4), width: 40}
+	m := newTestModel(Model{viewport: viewport.New(40, 4), width: 40})
 	fillMessages(&m, 40)
 	m.updateViewportFollow()
 
@@ -165,7 +165,7 @@ func TestEndKeyJumpsToBottom(t *testing.T) {
 		{Type: tea.KeyEnd},
 		{Type: tea.KeyRunes, Runes: []rune{'G'}},
 	} {
-		m := Model{viewport: viewport.New(40, 4), width: 40, textarea: textarea.New()}
+		m := newTestModel(Model{viewport: viewport.New(40, 4), width: 40, textarea: textarea.New()})
 		fillMessages(&m, 40)
 		m.updateViewport()
 		m.viewport.SetYOffset(0)
@@ -186,7 +186,7 @@ func TestGAtBottomFallsThroughToComposer(t *testing.T) {
 	ta := textarea.New()
 	ta.Focus()
 
-	m := Model{viewport: viewport.New(40, 4), width: 40, textarea: ta}
+	m := newTestModel(Model{viewport: viewport.New(40, 4), width: 40, textarea: ta})
 	fillMessages(&m, 40)
 	m.updateViewport()
 	m.viewport.GotoBottom()
@@ -209,7 +209,7 @@ func TestEndKeyRespectsComposerText(t *testing.T) {
 	ta.Focus()
 	ta.SetValue("still typing")
 
-	m := Model{viewport: viewport.New(40, 4), width: 40, textarea: ta}
+	m := newTestModel(Model{viewport: viewport.New(40, 4), width: 40, textarea: ta})
 	fillMessages(&m, 40)
 	m.updateViewport()
 	m.viewport.SetYOffset(0)

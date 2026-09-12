@@ -19,14 +19,14 @@ func TestApprovalChoiceKeysResolve(t *testing.T) {
 	// buffered response channel so resolveApproval's returned cmd never blocks.
 	newModel := func() (Model, chan chat.ToolCallResponse) {
 		ch := make(chan chat.ToolCallResponse, 1)
-		m := Model{
+		m := newTestModel(Model{
 			textarea:         textarea.New(),
 			viewport:         viewport.New(80, 10),
 			awaitingApproval: true,
 			approvalEditing:  false,
 			pendingTool:      &chat.ToolCallRequest{Name: "bash", Arguments: `{"script":"git status"}`},
 			toolResponseChan: ch,
-		}
+		})
 		return m, ch
 	}
 
@@ -115,13 +115,13 @@ func TestApprovalChoiceKeysResolve(t *testing.T) {
 // (empty AlwaysPrefix) when no safe bash prefix can be derived.
 func TestApprovalAlwaysWholeTool(t *testing.T) {
 	ch := make(chan chat.ToolCallResponse, 1)
-	m := Model{
+	m := newTestModel(Model{
 		textarea:         textarea.New(),
 		viewport:         viewport.New(80, 10),
 		awaitingApproval: true,
 		pendingTool:      &chat.ToolCallRequest{Name: "bash", Arguments: `{"script":"a && b"}`},
 		toolResponseChan: ch,
-	}
+	})
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	if cmd != nil {
 		cmd()
@@ -141,14 +141,14 @@ func TestApprovalAlwaysWholeTool(t *testing.T) {
 // step the user had just answered.
 func TestResolveApprovalClearsStaleReasoning(t *testing.T) {
 	ch := make(chan chat.ToolCallResponse, 1)
-	m := Model{
+	m := newTestModel(Model{
 		textarea:         textarea.New(),
 		viewport:         viewport.New(80, 10),
 		awaitingApproval: true,
 		pendingTool:      &chat.ToolCallRequest{Name: "bash", Arguments: `{"script":"ls"}`},
 		toolResponseChan: ch,
 		reasoning:        "stale trace from before the approval",
-	}
+	})
 
 	next, cmd := m.resolveApproval(chat.ToolCallResponse{Approved: true})
 	if cmd != nil {
