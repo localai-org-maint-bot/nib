@@ -1143,7 +1143,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Role:    "agent_result",
 				Name:    typ,
 				AgentID: ev.ID,
-				Content: chat.PreviewResult(ev.Result, toolResultPreviewLines),
+				// Not a tool result, so no formatter name applies — the agent's
+				// own free-text answer passes through as-is (or, on the rare
+				// chance it's a JSON object, degrades to rows).
+				Content: chat.PreviewResult("", ev.Result, toolResultPreviewLines),
 			})
 		}
 		m.updateViewport()
@@ -1157,7 +1160,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		res := chat.ToolResult(msg)
 		if res.AgentID == "" {
 			// Root agent: stream the result inline with its (previewed) body.
-			if preview := chat.PreviewResult(res.Result, toolResultPreviewLines); preview != "" {
+			if preview := chat.PreviewResult(res.Name, res.Result, toolResultPreviewLines); preview != "" {
 				m.appendMessage(ChatMessage{Role: "tool", Name: res.Name, Arguments: res.Arguments, Content: preview})
 				m.updateViewport()
 			}

@@ -380,7 +380,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
 		},
 		OnToolResult: func(res chat.ToolResult) {
-			preview := chat.PreviewResult(res.Result, 12)
+			preview := chat.PreviewResult(res.Name, res.Result, 12)
 			if preview == "" {
 				return
 			}
