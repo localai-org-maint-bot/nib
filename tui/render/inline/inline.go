@@ -341,27 +341,21 @@ func (presenter) Dialog(d render.Dialog, w int) string {
 			}
 		}
 
-		switch len(d.Options) {
-		case 0:
-			// Nothing to render.
-		case 1:
-			// Edit-mode hint: single line, no leading blank.
-			b.WriteString(gutter + optionStyle(d.Options[0]).Render(d.Options[0].Text))
-			b.WriteString("\n")
-		case 5:
-			// Classic approval menu: a blank gutter line, then the five options
-			// (once / always / this turn / this session / deny-edit) — matching
-			// the original hand-rolled block exactly.
+		// The leading blank gutter line separates the choice menu from the
+		// card/hint above it. It is keyed on being a genuine multi-option
+		// menu, not on a specific option count — a single option is the
+		// free-form edit-mode hint (no menu to separate from anything), and
+		// any other count (today: 5 — once / always / this turn / this
+		// session / deny-edit; tomorrow: possibly more) is a real menu and
+		// gets the same treatment. Switching on an exact count here was the
+		// original bug: adding a fifth option silently fell through to an
+		// "unexpected count" branch that dropped the blank line, and would
+		// silently do so again for a sixth.
+		if len(d.Options) > 1 {
 			b.WriteString(gutter + "\n")
-			for _, opt := range d.Options {
-				b.WriteString(gutter + optionStyle(opt).Render(opt.Text) + "\n")
-			}
-		default:
-			// Unexpected count: degrade visibly rather than render nothing,
-			// still respecting each option's own Emphasis.
-			for _, opt := range d.Options {
-				b.WriteString(gutter + optionStyle(opt).Render(opt.Text) + "\n")
-			}
+		}
+		for _, opt := range d.Options {
+			b.WriteString(gutter + optionStyle(opt).Render(opt.Text) + "\n")
 		}
 		return b.String()
 	}

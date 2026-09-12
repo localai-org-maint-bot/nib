@@ -358,9 +358,11 @@ func TestUnknownRoleRendersNothing(t *testing.T) {
 
 // TestDialogStructuralEquivalence covers every DialogKind and every branch
 // Dialog has: the pre-rendered ask block, the approval card with structured
-// rows, the RowsUnstructured prose fallback, and each of the option counts the
-// type documents (0, 1, the classic 4, and an unexpected count that must still
-// degrade visibly rather than vanish).
+// rows, the RowsUnstructured prose fallback, and the option-menu shapes the
+// type supports (0, 1 — the free-form edit-mode hint — and multi-option real
+// menus of two different sizes, which must both get the leading blank-gutter
+// separator since that decision is keyed on "is this a genuine multi-option
+// menu", not on any particular count).
 func TestDialogStructuralEquivalence(t *testing.T) {
 	const w = 60
 	approvalRows := [][2]string{{"path", "main.go"}, {"mode", "0644"}}
@@ -371,6 +373,10 @@ func TestDialogStructuralEquivalence(t *testing.T) {
 		tokens []string
 		// options is what every presenter must render one line for.
 		options []string
+		// wantLeadIn is checked only when options is non-empty: whether the
+		// menu must be preceded by a chrome-only lead-in line (the blank
+		// gutter row) separating it from the card/hint above.
+		wantLeadIn bool
 	}{
 		{
 			name: "ask block",
@@ -381,16 +387,40 @@ func TestDialogStructuralEquivalence(t *testing.T) {
 			tokens: []string{"which one?", "1. alpha", "2. beta"},
 		},
 		{
-			name: "approval with four options",
+			// The real production approval menu (tui/model.go's
+			// currentDialogs): five options, none of them a special-cased
+			// count in the renderer any more. This is the case that used to
+			// be named "approval with four options" and silently stopped
+			// matching production once a fifth option (the /yolo "[4] yes to
+			// everything this session" choice) was added — a stale fixture
+			// whose comment claimed to represent "the classic menu" while
+			// exercising a dead branch. Pinned here as the real shape instead.
+			name: "approval with the real five-option menu",
 			dialog: render.Dialog{
-				Kind:    render.DialogApproval,
-				Title:   "write main.go",
-				Rows:    approvalRows,
-				Hint:    "needs the fix applied",
-				Options: []render.DialogOption{{Text: "[y] yes", Emphasis: true}, {Text: "[a] always", Emphasis: true}, {Text: "[t] turn", Emphasis: true}, {Text: "[n] no", Emphasis: false}},
+				Kind:  render.DialogApproval,
+				Title: "bash wants to run",
+				Rows:  approvalRows,
+				Hint:  "needs the fix applied",
+				Options: []render.DialogOption{
+					{Text: theme.ApproveOnce, Emphasis: true},
+					{Text: theme.ApproveAlwaysPrefix + "`touch …`" + theme.ApproveAlwaysSuffix, Emphasis: true},
+					{Text: theme.ApproveTurn, Emphasis: true},
+					{Text: theme.ApproveSession, Emphasis: true},
+					{Text: theme.ApproveDenyEdit, Emphasis: false},
+				},
 			},
-			tokens:  []string{"write main.go", "path", "main.go", "mode", "0644", "needs the fix applied", "[y] yes", "[a] always", "[t] turn", "[n] no"},
-			options: []string{"[y] yes", "[a] always", "[t] turn", "[n] no"},
+			tokens: []string{
+				"bash wants to run", "path", "main.go", "mode", "0644", "needs the fix applied",
+				theme.ApproveOnce, theme.ApproveAlwaysPrefix, theme.ApproveTurn, theme.ApproveSession, theme.ApproveDenyEdit,
+			},
+			options: []string{
+				theme.ApproveOnce,
+				theme.ApproveAlwaysPrefix + "`touch …`" + theme.ApproveAlwaysSuffix,
+				theme.ApproveTurn,
+				theme.ApproveSession,
+				theme.ApproveDenyEdit,
+			},
+			wantLeadIn: true,
 		},
 		{
 			name: "approval in edit mode",
@@ -400,8 +430,9 @@ func TestDialogStructuralEquivalence(t *testing.T) {
 				Rows:    approvalRows,
 				Options: []render.DialogOption{{Text: "enter to send", Emphasis: true}},
 			},
-			tokens:  []string{"write main.go", "path", "mode", "enter to send"},
-			options: []string{"enter to send"},
+			tokens:     []string{"write main.go", "path", "mode", "enter to send"},
+			options:    []string{"enter to send"},
+			wantLeadIn: false,
 		},
 		{
 			name: "approval with unstructured arguments",
@@ -412,8 +443,9 @@ func TestDialogStructuralEquivalence(t *testing.T) {
 				RowsUnstructured: true,
 				Options:          []render.DialogOption{{Text: "[y] yes", Emphasis: true}},
 			},
-			tokens:  []string{"run something", "a raw prose block describing the call", "[y] yes"},
-			options: []string{"[y] yes"},
+			tokens:     []string{"run something", "a raw prose block describing the call", "[y] yes"},
+			options:    []string{"[y] yes"},
+			wantLeadIn: false,
 		},
 		{
 			name: "approval with no options",
@@ -425,14 +457,18 @@ func TestDialogStructuralEquivalence(t *testing.T) {
 			tokens: []string{"write main.go", "path", "mode"},
 		},
 		{
-			name: "approval with an unexpected option count",
+			// A second, deliberately different multi-option count than the
+			// five-option case above: the lead-in rule must not be a
+			// disguised "== 5" check in a different shape.
+			name: "approval with a two-option menu",
 			dialog: render.Dialog{
 				Kind:    render.DialogApproval,
 				Title:   "write main.go",
 				Options: []render.DialogOption{{Text: "[y] yes", Emphasis: true}, {Text: "[n] no", Emphasis: false}},
 			},
-			tokens:  []string{"write main.go", "[y] yes", "[n] no"},
-			options: []string{"[y] yes", "[n] no"},
+			tokens:     []string{"write main.go", "[y] yes", "[n] no"},
+			options:    []string{"[y] yes", "[n] no"},
+			wantLeadIn: true,
 		},
 	}
 
@@ -446,6 +482,16 @@ func TestDialogStructuralEquivalence(t *testing.T) {
 				// silently dropping one, changes what the user can press.
 				if got := optionLines(out, tc.options); got != len(tc.options) {
 					t.Errorf("%s rendered %d option lines, want %d: %q", name, got, len(tc.options), out)
+				}
+				// The blank-gutter lead-in is structural (it changes how many
+				// visually distinct rows the menu has), not chrome, so it is
+				// pinned directly rather than folded into the fingerprint —
+				// a fingerprint mismatch would only say "something differs"
+				// without naming what.
+				if len(tc.options) > 0 {
+					if got := hasMenuLeadIn(out, tc.options, tc.tokens); got != tc.wantLeadIn {
+						t.Errorf("%s: menu lead-in = %v, want %v: %q", name, got, tc.wantLeadIn, out)
+					}
 				}
 				fps[name] = fingerprintOf(out, tc.tokens)
 			}
@@ -470,6 +516,46 @@ func optionLines(out string, options []string) int {
 		}
 	}
 	return len(seen)
+}
+
+// hasMenuLeadIn reports whether the line immediately before the first option
+// line is a chrome-only lead-in: it renders as non-blank (a gutter marker or
+// similar), yet carries none of the dialog's own content (title, rows, hint,
+// or any option text) — i.e. it is a dedicated spacer row, not a content line
+// that merely happens to precede the menu. tokens must be the case's full
+// token set (not just its options), or a content line right above the menu
+// (e.g. the last argument row in edit mode) would be mistaken for a lead-in
+// simply because it doesn't happen to repeat an option's own text. This is
+// deliberately blind to what the chrome actually looks like (no gutter glyph
+// is hardcoded here), so it holds across presenters that render that spacer
+// differently.
+func hasMenuLeadIn(out string, options, tokens []string) bool {
+	lines := strings.Split(stripANSI(out), "\n")
+	first := -1
+	for i, line := range lines {
+		for _, opt := range options {
+			if opt != "" && strings.Contains(line, opt) {
+				first = i
+				break
+			}
+		}
+		if first >= 0 {
+			break
+		}
+	}
+	if first <= 0 {
+		return false
+	}
+	lead := lines[first-1]
+	if strings.TrimSpace(lead) == "" {
+		return false
+	}
+	for _, tok := range tokens {
+		if tok != "" && strings.Contains(lead, tok) {
+			return false
+		}
+	}
+	return true
 }
 
 // TestUnknownDialogKindRendersNothing: a kind no presenter handles must produce
