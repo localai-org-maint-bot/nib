@@ -568,6 +568,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m.resolveApproval(chat.ToolCallResponse{Approved: true, AlwaysAllow: true, AlwaysPrefix: prefix})
 					case '3', 'A':
 						return m.resolveApproval(chat.ToolCallResponse{Approved: true, AllowAllTurn: true})
+					case '4':
+						if m.session != nil {
+							m.session.SetAutoApprove(true)
+						}
+						return m.resolveApproval(chat.ToolCallResponse{Approved: true})
 					case 'n', 'N':
 						return m.resolveApproval(chat.ToolCallResponse{Approved: false})
 					case 'e', 'E':
@@ -1309,6 +1314,18 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 			m.appendMessage(ChatMessage{Role: "agent", Content: "No goal to clear."})
 		}
 		return nil
+	case slash.KindYolo:
+		on := !m.session.AutoApprove()
+		if action.YoloOn != nil {
+			on = *action.YoloOn
+		}
+		m.session.SetAutoApprove(on)
+		notice := theme.YoloOff
+		if on {
+			notice = theme.YoloOn
+		}
+		m.appendMessage(ChatMessage{Role: "agent", Content: notice})
+		return nil
 	case slash.KindAttach:
 		switch action.AttachOp {
 		case slash.AttachStage:
@@ -1930,6 +1947,7 @@ func (m Model) currentDialogs() []render.Dialog {
 				{Text: theme.ApproveOnce, Emphasis: true},
 				{Text: theme.ApproveAlwaysPrefix + scope + theme.ApproveAlwaysSuffix, Emphasis: true},
 				{Text: theme.ApproveTurn, Emphasis: true},
+				{Text: theme.ApproveSession, Emphasis: true},
 				{Text: theme.ApproveDenyEdit, Emphasis: false},
 			}
 		}
@@ -2069,7 +2087,7 @@ func (m Model) viewState() render.ViewState {
 		Height:      m.height,
 		Cwd:         shortenPath(currentDir()),
 		Brand:       theme.BrandName,
-		AutoApprove: m.cfg.ApprovalMode == "auto",
+		AutoApprove: m.session != nil && m.session.AutoApprove(),
 		Loading:     m.loading,
 		Status:      status,
 		Spinner:     m.spinner.View(),

@@ -31,6 +31,7 @@ const (
 	KindAttach                // stage/list/clear file attachments
 	KindModelList             // list available models
 	KindModelSet              // switch the session model to Model
+	KindYolo                  // toggle (or explicitly set) session-wide auto-approval
 )
 
 // AttachOp enumerates the /attach sub-operations.
@@ -44,11 +45,12 @@ const (
 
 // Action is the resolved result of a submitted input line.
 type Action struct {
-	Kind  Kind
-	Text  string // for KindSend: the message to send
-	Skill string // for KindLoadSkill: the skill name
-	Err   string // for KindError
-	Model string // for KindModelSet: the model to switch to
+	Kind   Kind
+	Text   string // for KindSend: the message to send
+	Skill  string // for KindLoadSkill: the skill name
+	Err    string // for KindError
+	Model  string // for KindModelSet: the model to switch to
+	YoloOn *bool  // for KindYolo: nil = toggle, non-nil = set explicitly (on/off)
 
 	// Loop actions:
 	Interval time.Duration // KindLoopStart: 0 = self-paced
@@ -122,6 +124,19 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 		return Action{Kind: KindModelSet, Model: name}
 	case "loop":
 		return resolveLoop(rest)
+	case "yolo":
+		switch strings.ToLower(strings.TrimSpace(rest)) {
+		case "":
+			return Action{Kind: KindYolo} // nil YoloOn = toggle
+		case "on":
+			on := true
+			return Action{Kind: KindYolo, YoloOn: &on}
+		case "off":
+			off := false
+			return Action{Kind: KindYolo, YoloOn: &off}
+		default:
+			return Action{Kind: KindError, Err: "usage: /yolo [on|off]"}
+		}
 	case "goal":
 		return resolveGoal(rest)
 	case "attach":

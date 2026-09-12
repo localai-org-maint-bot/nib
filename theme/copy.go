@@ -9,9 +9,13 @@ const (
 	LabelYouText = "you"
 
 	HelpDefault      = "enter send · ctrl+y use command · G/end newest · esc exit"
-	HelpApproval     = "1 once · 2 always · 3 this turn · n no · e edit · esc deny"
+	HelpApproval     = "1 once · 2 always · 3 this turn · 4 this session · n no · e edit · esc deny"
 	HelpApprovalEdit = "enter submit · esc cancel"
 	ApproveEditHint  = "describe the change · enter submit · esc cancel"
+
+	// YoloOn/YoloOff are the transcript notices the /yolo toggle appends.
+	YoloOn  = "yolo on — every tool call is auto-approved"
+	YoloOff = "yolo off — tool calls need approval again"
 
 	// NewOutputText is the footer marker shown when the viewport is scrolled up
 	// and content has arrived below the fold. Composed with NewOutputGlyph by
@@ -24,6 +28,7 @@ const (
 	ApproveAlwaysPrefix = "[2] always allow "
 	ApproveAlwaysSuffix = "  (this session)"
 	ApproveTurn         = "[3] yes to everything this turn"
+	ApproveSession      = "[4] yes to everything this session"
 	ApproveDenyEdit     = "[n] no · [e] edit"
 
 	EmptyTagline = "a calm assistant for your terminal."

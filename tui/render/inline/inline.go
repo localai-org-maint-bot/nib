@@ -348,9 +348,10 @@ func (presenter) Dialog(d render.Dialog, w int) string {
 			// Edit-mode hint: single line, no leading blank.
 			b.WriteString(gutter + optionStyle(d.Options[0]).Render(d.Options[0].Text))
 			b.WriteString("\n")
-		case 4:
-			// Classic approval menu: a blank gutter line, then the four options —
-			// matching the original hand-rolled block exactly.
+		case 5:
+			// Classic approval menu: a blank gutter line, then the five options
+			// (once / always / this turn / this session / deny-edit) — matching
+			// the original hand-rolled block exactly.
 			b.WriteString(gutter + "\n")
 			for _, opt := range d.Options {
 				b.WriteString(gutter + optionStyle(opt).Render(opt.Text) + "\n")
