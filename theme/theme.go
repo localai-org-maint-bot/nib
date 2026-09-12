@@ -42,8 +42,9 @@ var (
 
 // spinnerFrames animates the working indicator. Braille cells read as a smooth
 // rotation at the 80ms tick; the VT console cannot render them, so
-// applyGlyphProfile swaps in the classic ASCII barber pole there. Every frame in
-// a set is the same width so the status line never jitters.
+// SpinnerFrames swaps in the classic ASCII barber pole there, at call time
+// rather than in applyGlyphProfile like the other swappable glyphs. Every
+// frame in a set is the same width so the status line never jitters.
 var spinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 
 // SpinnerFrames returns the animation frames for the current terminal profile.

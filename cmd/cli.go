@@ -37,9 +37,6 @@ func resolveCLIInput(input string, cfg types.Config) slash.Action {
 	return slash.Resolve(input, cfg.Commands, cfg.Skills, cfg.Agents)
 }
 
-// Spinner frames for animated display
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
 // spinner manages an animated spinner for CLI output.
 //
 // The animation uses a carriage return to redraw a single line in place, which
@@ -101,6 +98,7 @@ func (s *spinner) start(message string) {
 	s.mu.Unlock()
 
 	go func() {
+		frames := theme.SpinnerFrames()
 		frame := 0
 		ticker := time.NewTicker(80 * time.Millisecond)
 		defer ticker.Stop()
@@ -116,8 +114,8 @@ func (s *spinner) start(message string) {
 				s.mu.Lock()
 				msg := s.message
 				s.mu.Unlock()
-				fmt.Fprintf(s.out, "\r%s %s", theme.Help.Render(spinnerFrames[frame]), theme.Help.Render(msg))
-				frame = (frame + 1) % len(spinnerFrames)
+				fmt.Fprintf(s.out, "\r%s %s", theme.Help.Render(frames[frame]), theme.Help.Render(msg))
+				frame = (frame + 1) % len(frames)
 			}
 		}
 	}()
