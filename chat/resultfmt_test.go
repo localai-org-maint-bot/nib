@@ -73,6 +73,26 @@ func TestFormatToolResultKnownTools(t *testing.T) {
 			result: `{"success":true}`,
 			want:   "success",
 		},
+		{
+			name:    "bash_job_output renders stdout like bash, not the JSON envelope",
+			tool:    "bash_job_output",
+			result:  `{"job_id":"j1","status":"completed","done":true,"exit_code":0,"stdout":"line one\nline two\n","stderr":""}`,
+			want:    "line one\nline two",
+			notWant: `"stdout"`,
+		},
+		{
+			name:    "load_skill renders the instructions body, not the JSON envelope",
+			tool:    "load_skill",
+			result:  `{"name":"golang-testing","instructions":"# Golang Testing\n\nUse table-driven tests.","found":true}`,
+			want:    "# Golang Testing\n\nUse table-driven tests.",
+			notWant: `"instructions"`,
+		},
+		{
+			name:   "load_skill not-found falls back to rows, surfacing the error",
+			tool:   "load_skill",
+			result: `{"name":"nope","instructions":"","found":false,"error":"skill not found"}`,
+			want:   "skill not found",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -106,6 +126,30 @@ func TestFormatToolResultNonJSONPassesThrough(t *testing.T) {
 	const raw = "this is not json at all"
 	if got := FormatToolResult("whatever", raw); got != raw {
 		t.Errorf("FormatToolResult = %q, want the raw text %q", got, raw)
+	}
+}
+
+// TestFormatToolResultBashSilentFailure: a bash result with no stdout/stderr
+// but a nonzero exit code must say so, not render nothing — a silent failure
+// must not look identical to a silent success.
+func TestFormatToolResultBashSilentFailure(t *testing.T) {
+	got := FormatToolResult("bash", `{"script":"exit 2","stdout":"","stderr":"","exit_code":2,"success":false}`)
+	if want := "(exit 2, no output)"; got != want {
+		t.Errorf("FormatToolResult(bash) = %q, want %q", got, want)
+	}
+}
+
+// TestFormatToolResultBashSilentSuccess: no stdout/stderr and a zero exit has
+// nothing tool-specific to say (same as fmtWriteResult on a bare success), so
+// fmtBashResult returns "" and it falls through to rows — still readable
+// text, not the JSON dump this task removes, just not a one-line summary.
+func TestFormatToolResultBashSilentSuccess(t *testing.T) {
+	got := FormatToolResult("bash", `{"script":"true","stdout":"","stderr":"","exit_code":0,"success":true}`)
+	if strings.Contains(got, "{") || strings.Contains(got, `"`) {
+		t.Errorf("silent success still looks like JSON: %q", got)
+	}
+	if !strings.Contains(got, "success") {
+		t.Errorf("FormatToolResult(bash) = %q, want the success row surfaced", got)
 	}
 }
 

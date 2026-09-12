@@ -13,21 +13,25 @@ import (
 // flattened key/value rows — the same fallback argRows already gives arguments —
 // and a result that is not JSON at all passes through as text.
 //
-// read and bash are here (not left to fall through as "obviously not JSON")
-// because the MCP layer wraps every built-in tool's structured output as JSON
-// text (github.com/modelcontextprotocol/go-sdk's AddTool marshals the output
-// struct when the handler doesn't set Content itself) — so a file's content or
-// a script's stdout arrives as one field of a JSON envelope, not raw text.
-// Without a formatter here, the row fallback would flatten that field and show
-// only its first line, which is a worse regression than the JSON dump this
-// task is fixing.
+// read, bash, bash_job_output and load_skill are here (not left to fall
+// through as "obviously not JSON") because the MCP layer wraps every built-in
+// tool's structured output as JSON text (github.com/modelcontextprotocol/
+// go-sdk's AddTool marshals the output struct when the handler doesn't set
+// Content itself) — so a file's content, a script's stdout, or a skill's
+// instructions arrives as one field of a JSON envelope, not raw text. Without
+// a formatter here, the row fallback would flatten that field and show only
+// its first line (the JSON decoder restores real newlines, so this isn't
+// hypothetical), which is a worse regression than the JSON dump this task is
+// fixing.
 var toolResultFormatters = map[string]func(any) string{
-	"grep":  fmtGrepResult,
-	"glob":  fmtGlobResult,
-	"edit":  fmtEditResult,
-	"write": fmtWriteResult,
-	"read":  fmtReadResult,
-	"bash":  fmtBashResult,
+	"grep":            fmtGrepResult,
+	"glob":            fmtGlobResult,
+	"edit":            fmtEditResult,
+	"write":           fmtWriteResult,
+	"read":            fmtReadResult,
+	"bash":            fmtBashResult,
+	"bash_job_output": fmtBashResult, // bgOutputResult has the same stdout/stderr/exit_code shape
+	"load_skill":      fmtLoadSkillResult,
 }
 
 // FormatToolResult renders a tool's output for human reading. A tool with a
@@ -172,6 +176,22 @@ func fmtReadResult(v any) string {
 		return ""
 	}
 	return content
+}
+
+// fmtLoadSkillResult renders the load_skill tool's instructions body,
+// dropping the name/found/error envelope around it. A not-found result has
+// no instructions, so it returns "" and falls through to rows, surfacing the
+// "error" field instead.
+func fmtLoadSkillResult(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	instructions, ok := m["instructions"].(string)
+	if !ok || instructions == "" {
+		return ""
+	}
+	return instructions
 }
 
 // fmtBashResult renders a bash result as its stdout followed by its stderr,
