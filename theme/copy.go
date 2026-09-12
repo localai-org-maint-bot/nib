@@ -66,7 +66,7 @@ const (
 	// list itself and, unlike HelpAsk, always mention the free-text escape
 	// hatch (typing instead of picking), since that's the one thing every ask
 	// dialog offers regardless of how it's answered.
-	HelpAsk             = "up/down move · enter pick · esc cancel"
+	HelpAsk             = "up/down move · pgup/pgdn page · enter pick · esc cancel"
 	AskHintSingleSelect = "up/down move · enter pick · or type your own answer"
 	AskHintMultiSelect  = "up/down move · space toggle · enter confirm · or type your own answer"
 	AskHintFreeText     = "type your answer"
