@@ -182,7 +182,7 @@ func goldenCases() []goldenCase {
 		{"dialog ask", func(p render.Presenter) string {
 			return p.Dialog(render.Dialog{
 				Kind: render.DialogAsk, Title: "which one?",
-				Options: []render.DialogOption{{Text: "alpha"}, {Text: "beta"}},
+				Options:  []render.DialogOption{{Text: "alpha"}, {Text: "beta"}},
 				Selected: 1, Hint: "type instead of picking also works",
 			}, w)
 		}},

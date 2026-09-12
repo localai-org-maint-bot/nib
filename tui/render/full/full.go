@@ -7,12 +7,14 @@
 // that redesign: RoleUser/RoleAssistant now get a coloured gutter instead of
 // inline's word label (see contentPrefix and gutterLines); everything else —
 // Reasoning, Dialog, Header, Footer, and the RoleAgent/RoleTool/RoleError
-// chrome — still mirrors inline exactly, and the conformance suite
-// (tui/render/conformance_test.go) is what proves the divergence stops there.
+// chrome — still mirrors inline exactly. Task 17 gave that shared remainder
+// one implementation (render.Base, which both presenters embed) instead of
+// two copies kept in sync by hand; the conformance suite
+// (tui/render/conformance_test.go) is what proves the divergence stops at
+// what's still overridden here.
 package full
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -21,13 +23,19 @@ import (
 	"github.com/mudler/nib/tui/render"
 )
 
-// presenter is the full-screen Presenter. It holds no state: every method is
-// a pure function of its arguments.
-type presenter struct{}
+// presenter is the full-screen Presenter. It embeds render.Base for every
+// method whose implementation doesn't vary by surface (ContentWidth,
+// Reasoning, Dialog, Header/HeaderHeight, Footer/FooterHeight) and overrides
+// only Caps, Message and Frame — the pieces that genuinely differ from inline
+// (Task 17). It holds no other state: every method is a pure function of its
+// arguments.
+type presenter struct {
+	render.Base
+}
 
 // New returns the full-screen Presenter.
 func New() render.Presenter {
-	return presenter{}
+	return presenter{Base: render.Base{Prefix: contentPrefix}}
 }
 
 func (presenter) Caps() render.Caps {
@@ -40,42 +48,12 @@ func (presenter) Caps() render.Caps {
 	return render.Caps{AltScreen: true, Mouse: true, OverlayDialogs: true}
 }
 
-// prefixed lays out a block as `prefix + first line`, with continuation lines
-// indented to the prefix width. This replaces the four near-identical loops the
-// role switch used to carry.
-func prefixed(prefix, content string) string {
-	pw := lipgloss.Width(prefix)
-	var b strings.Builder
-	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
-	for i, line := range lines {
-		if i == 0 {
-			b.WriteString(prefix)
-		} else {
-			b.WriteString(strings.Repeat(" ", pw))
-		}
-		b.WriteString(line)
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-// styledLines applies style.Render to each line of content independently
-// (rather than to the joined block), matching the original per-line styling
-// the hand-rolled agent-message loop used to do.
-func styledLines(style lipgloss.Style, content string) string {
-	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
-	for i, line := range lines {
-		lines[i] = style.Render(line)
-	}
-	return strings.Join(lines, "\n")
-}
-
 // contentPrefix returns the chrome this surface puts before a role's content:
 // the gutter or label Message writes, and the width it reserves on every
-// line. Message and ContentWidth both read it, so the width the model
-// pre-renders markdown at can never drift from the width this surface's
-// chrome actually leaves — the model asks (ContentWidth) instead of
-// reconstructing the prefix string itself.
+// line. Message and ContentWidth (render.Base, via the Prefix field set in
+// New) both read it, so the width the model pre-renders markdown at can never
+// drift from the width this surface's chrome actually leaves — the model
+// asks (ContentWidth) instead of reconstructing the prefix string itself.
 //
 // RoleUser/RoleAssistant get a one-column coloured gutter (theme.MsgGutter)
 // instead of inline's word label ("you ·"/"nib ·"): this surface owns the
@@ -103,14 +81,15 @@ func contentPrefix(role render.Role) string {
 }
 
 // gutterLines lays out a block with the gutter prefix repeated on every
-// non-blank line, rather than only on the first line the way prefixed's label
-// layout does — a gutter's whole point is to mark the block as it scrolls by,
-// not to head it once. A blank line inside the content (a markdown paragraph
-// break) is left bare: painting the bar across it would read as the message
-// continuing through the gap rather than pausing for one, and would silently
-// merge what must stay two visually separate paragraphs (and, cross-surface,
-// two separate blocks — see TestMessageStructuralEquivalence's "multiline
-// content" case, which requires both presenters to agree on block count).
+// non-blank line, rather than only on the first line the way render.Prefixed's
+// label layout does — a gutter's whole point is to mark the block as it
+// scrolls by, not to head it once. A blank line inside the content (a
+// markdown paragraph break) is left bare: painting the bar across it would
+// read as the message continuing through the gap rather than pausing for one,
+// and would silently merge what must stay two visually separate paragraphs
+// (and, cross-surface, two separate blocks — see
+// TestMessageStructuralEquivalence's "multiline content" case, which requires
+// both presenters to agree on block count).
 func gutterLines(prefix, content string) string {
 	var b strings.Builder
 	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
@@ -122,20 +101,6 @@ func gutterLines(prefix, content string) string {
 		b.WriteString("\n")
 	}
 	return b.String()
-}
-
-// ContentWidth reports how many cells are left for a role's content once this
-// surface's chrome is accounted for. The model calls it to pre-render
-// width-cached markdown (glamour) at the width this presenter will actually
-// leave, instead of hard-coding one surface's prefix for both. The result is
-// clamped to at least 1: a terminal narrower than the chrome must still give
-// a renderer a legal width rather than zero or a negative one.
-func (presenter) ContentWidth(role render.Role, w int) int {
-	cw := w - lipgloss.Width(contentPrefix(role))
-	if cw < 1 {
-		cw = 1
-	}
-	return cw
 }
 
 // Message renders one chat entry, including the trailing blank-line separator
@@ -172,7 +137,7 @@ func (presenter) Message(m render.Message, prev render.Role, w int) string {
 		body = gutterLines(contentPrefix(render.RoleAssistant), m.Content)
 
 	case render.RoleAgent:
-		body = prefixed(contentPrefix(render.RoleAgent), styledLines(theme.Subtle, m.Content))
+		body = render.Prefixed(contentPrefix(render.RoleAgent), render.StyledLines(theme.Subtle, m.Content))
 		if m.HugNext {
 			return body
 		}
@@ -199,271 +164,12 @@ func (presenter) Message(m render.Message, prev render.Role, w int) string {
 	case render.RoleError:
 		prefix := contentPrefix(render.RoleError)
 		wrapped := render.Wrap(m.Content, w-lipgloss.Width(prefix))
-		body = prefixed(prefix, wrapped)
+		body = render.Prefixed(prefix, wrapped)
 
 	default:
 		return ""
 	}
 	return body + "\n"
-}
-
-// Reasoning renders the working indicator (spinner + status verb) and, when
-// loading, the collapsible reasoning trace beneath it. Renders nothing when
-// !v.Loading. The trace itself is capped through render.CollapsibleBox, which
-// this task adds a producer for: v.Reasoning.Collapsed/MaxLines, populated by
-// the model in viewState() from Model.reasoningCollapsed and
-// theme.ReasoningMaxLines. Collapsed, the box shows the TRAILING lines of the
-// trace (never the leading ones) — see CollapsibleBox's doc for why: a
-// head-anchored box freezes on the trace's opening words and reads as a hang,
-// while tailing doubles the box as its own progress indicator. This mirrors
-// inline byte-for-byte, same precedent as the rest of this file — the
-// conformance suite enforces it.
-func (presenter) Reasoning(v render.ViewState, w int) string {
-	if !v.Loading {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString(render.Loader(v.Spinner, v.Status, "", w))
-	b.WriteString("\n")
-	if strings.TrimSpace(v.Reasoning.Text) != "" {
-		r := v.Reasoning
-		box := render.CollapsibleBox{
-			Lines:     strings.Split(strings.TrimRight(render.Wrap(r.Text, w-4), "\n"), "\n"),
-			MaxLines:  r.MaxLines,
-			Collapsed: r.Collapsed,
-		}
-		b.WriteString(theme.ReasoningHeader() + "\n")
-		for _, line := range box.Visible() {
-			b.WriteString("  " + theme.Subtle.Render(theme.BoxRule) + " " + theme.Reasoning.Render(line) + "\n")
-		}
-		// Default: expanded with nothing hidden — offer to collapse it back.
-		// Collapsed with something hidden — offer to expand and say how much
-		// is behind the fold. Collapsed with nothing hidden (a short trace
-		// that never grew past MaxLines) — no hint at all: there is nothing
-		// either affordance would change.
-		hint := theme.ReasoningCollapse
-		if n := box.Hidden(); n > 0 {
-			hint = "… " + strconv.Itoa(n) + theme.ReasoningMore + theme.ReasoningExpand
-		} else if r.Collapsed {
-			hint = ""
-		}
-		if hint != "" {
-			b.WriteString("  " + theme.Hint.Render(hint) + "\n")
-		}
-	}
-	return b.String()
-}
-
-// optionStyle picks the choice-menu style for one DialogOption: the bold
-// actionable-key style when Emphasis is set, the dim hint style otherwise.
-func optionStyle(o render.DialogOption) lipgloss.Style {
-	if o.Emphasis {
-		return theme.ApproveKey
-	}
-	return theme.Help
-}
-
-// dialogAskMarker picks the leading marker for one ask_user option row: a
-// checkbox when the dialog is multi-select (d.Checked non-nil), a radio
-// otherwise, filled when checked/selected and hollow when not. i indexes
-// d.Options; safe even if d.Checked is shorter (defensive, since a Presenter
-// never constructs these values itself).
-func dialogAskMarker(d render.Dialog, i int) string {
-	if d.Checked != nil {
-		if i < len(d.Checked) && d.Checked[i] {
-			return theme.CheckOn
-		}
-		return theme.CheckOff
-	}
-	if i == d.Selected {
-		return theme.RadioOn
-	}
-	return theme.RadioOff
-}
-
-// Dialog renders a modal prompt. DialogAsk lays out the question (Title),
-// then one row per option — a cursor mark on the highlighted row, a radio or
-// checkbox per dialogAskMarker, the row text in theme.ApproveKey when
-// highlighted and theme.Help otherwise (mirroring DialogApproval's Emphasis
-// styling) — and Hint beneath, wrapped. An ask with no options (free-text
-// only) degrades to placing Title alone, same as before this task.
-// DialogResume (Phase 3 Task 15, the /resume picker) shares this exact
-// branch: buildResumeDialog (tui/resume.go) produces the same Title +
-// single-select Options + Hint shape buildAskDialog does, so there is
-// nothing for a Presenter to render differently. This mirrors inline
-// byte-for-byte, same precedent as the rest of this file — the conformance
-// suite enforces it. DialogApproval lays out Rows (the argument card, or —
-// when RowsUnstructured — a single wrapped prose block), Hint (the captured
-// reasoning, wrapped) and Options (the choice menu, one line per option
-// styled per its Emphasis).
-func (presenter) Dialog(d render.Dialog, w int) string {
-	switch d.Kind {
-	case render.DialogAsk, render.DialogResume:
-		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
-		var b strings.Builder
-		b.WriteString(gutter + theme.LabelNib.Render(d.Title))
-		b.WriteString("\n")
-		for i, opt := range d.Options {
-			cursor := "  "
-			style := theme.Help
-			if i == d.Selected {
-				cursor = theme.Cursor + " "
-				style = theme.ApproveKey
-			}
-			b.WriteString(gutter + cursor + dialogAskMarker(d, i) + " " + style.Render(opt.Text))
-			b.WriteString("\n")
-		}
-		if d.Hint != "" {
-			wrapped := render.Wrap(d.Hint, w-4)
-			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
-				b.WriteString(gutter + theme.Hint.Render(line) + "\n")
-			}
-		}
-		return b.String()
-
-	case render.DialogApproval:
-		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
-		var b strings.Builder
-		b.WriteString(gutter + theme.ApproveKey.Render(d.Title))
-		b.WriteString("\n")
-
-		if d.RowsUnstructured {
-			// Fallback: unstructured args, wrapped and dimmed, no key column.
-			if len(d.Rows) > 0 {
-				wrapped := render.Wrap(d.Rows[0][1], w-4)
-				for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
-					b.WriteString(gutter + theme.Help.Render(line) + "\n")
-				}
-			}
-		} else if len(d.Rows) > 0 {
-			maxKey := 0
-			for _, row := range d.Rows {
-				if len(row[0]) > maxKey {
-					maxKey = len(row[0])
-				}
-			}
-			for _, row := range d.Rows {
-				key := row[0] + strings.Repeat(" ", maxKey-len(row[0]))
-				val := render.TruncateLine(row[1], w-8-maxKey)
-				b.WriteString(gutter + "  " + theme.Meta.Render(key) + "  " + theme.Help.Render(val) + "\n")
-			}
-		}
-
-		if d.Hint != "" {
-			wrapped := render.Wrap(d.Hint, w-4)
-			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
-				b.WriteString(gutter + theme.Reasoning.Render(line) + "\n")
-			}
-		}
-
-		// The leading blank gutter line separates the choice menu from the
-		// card/hint above it. It is keyed on being a genuine multi-option
-		// menu, not on a specific option count — a single option is the
-		// free-form edit-mode hint (no menu to separate from anything), and
-		// any other count (today: 5 — once / always / this turn / this
-		// session / deny-edit; tomorrow: possibly more) is a real menu and
-		// gets the same treatment. Switching on an exact count here was the
-		// original bug: adding a fifth option silently fell through to an
-		// "unexpected count" branch that dropped the blank line, and would
-		// silently do so again for a sixth.
-		if len(d.Options) > 1 {
-			b.WriteString(gutter + "\n")
-		}
-		for _, opt := range d.Options {
-			b.WriteString(gutter + optionStyle(opt).Render(opt.Text) + "\n")
-		}
-		return b.String()
-	}
-	return ""
-}
-
-// Header renders the brand/badge line and the rule beneath it.
-func (p presenter) Header(v render.ViewState) string {
-	var b strings.Builder
-	left := theme.Brand.Render(v.Brand)
-	if v.AutoApprove {
-		left += "  " + theme.Yolo.Render(theme.YoloBadge)
-	}
-	cwd := theme.Meta.Render(v.Cwd)
-	gap := v.Width - lipgloss.Width(left) - lipgloss.Width(cwd)
-	if gap < 1 {
-		gap = 1
-	}
-	b.WriteString(left + strings.Repeat(" ", gap) + cwd)
-	b.WriteString("\n")
-	b.WriteString(theme.Hairline(v.Width))
-	b.WriteString("\n")
-	return b.String()
-}
-
-// HeaderHeight reports how many terminal rows Header occupies above the body
-// — two today (the brand/cwd line and the hairline beneath it). Measured from
-// the real string rather than stated as a constant, so a header redesign
-// re-budgets the layout instead of silently pushing the frame past the
-// terminal's last row. See render.BlockRows for why this counts newlines
-// rather than using lipgloss.Height: Frame writes body straight onto the
-// header.
-func (p presenter) HeaderHeight(v render.ViewState) int {
-	return render.BlockRows(p.Header(v))
-}
-
-// footerRowStyle renders one FooterRow's text (glyph already prefixed), per
-// its Kind. FooterJobs/FooterShell reproduce the original theme.Meta +
-// width-fill treatment (Width doesn't just pad — lipgloss wraps content
-// exceeding w, so a narrow terminal hard-wraps instead of spilling, exactly
-// as before); everything else — FooterLoops/FooterGoal, and the zero-value
-// FooterKindUnset (a forgotten Kind on some future fifth row) — gets the
-// plain default: theme.Subtle, unfilled.
-func footerRowStyle(kind render.FooterRowKind, text string, w int) string {
-	switch kind {
-	case render.FooterJobs, render.FooterShell:
-		return theme.Meta.Width(w).Render(text)
-	default:
-		return theme.Subtle.Render(text)
-	}
-}
-
-// Footer renders the new-output marker (when scrolled up with unread content
-// below the fold), the help/badges line, the error line, and the job-status
-// footer rows — everything that lives between the composer and the bottom of
-// the screen.
-func (p presenter) Footer(v render.ViewState, w int) string {
-	var b strings.Builder
-	if v.NewOutput {
-		b.WriteString(theme.NewOutputMarker())
-		b.WriteString("\n")
-	}
-	if v.Badges != "" {
-		gap := w - lipgloss.Width(v.Help) - lipgloss.Width(v.Badges)
-		if gap < 1 {
-			gap = 1
-		}
-		b.WriteString(v.Help + strings.Repeat(" ", gap) + v.Badges)
-	} else {
-		b.WriteString(v.Help)
-	}
-	if v.Err != "" {
-		b.WriteString("\n" + theme.Error.Render(theme.Cross+" "+v.Err))
-	}
-	for _, row := range v.Footers {
-		text := row.Text
-		if row.Glyph != "" {
-			text = row.Glyph + " " + text
-		}
-		b.WriteString("\n" + footerRowStyle(row.Kind, text, w))
-	}
-	return b.String()
-}
-
-// FooterHeight reports how many terminal rows Footer occupies for this
-// ViewState at this width — 1 for the bare help line, up to 7 once the
-// new-output marker, an error line and the four job-status rows are all
-// present. The shared core budgets the viewport against it, so an answer that
-// disagrees with Footer by even one row makes the composed frame overflow the
-// screen. Measuring the real output is the only way the two cannot drift as
-// Phase 3 reshapes this surface's chrome.
-func (p presenter) FooterHeight(v render.ViewState, w int) int {
-	return lipgloss.Height(p.Footer(v, w))
 }
 
 // Frame composes the whole screen from its four already-rendered pieces:
@@ -489,6 +195,12 @@ func (p presenter) FooterHeight(v render.ViewState, w int) int {
 // dialog from scrolling away with history when the user scrolls the
 // transcript, and from rendering twice now that the core skips its own
 // scrollback append for a surface that declares OverlayDialogs.
+//
+// p.Dialog resolves to render.Base's Dialog (promoted through the embedded
+// Base, since presenter does not override it) — the exact same
+// implementation inline relies on for its own baked-into-body dialogs, so the
+// two surfaces can never render a dialog's own content differently, only
+// place it differently.
 func (p presenter) Frame(v render.ViewState, header, body, composer, footer string, w, h int) string {
 	var b strings.Builder
 	b.WriteString(header)
