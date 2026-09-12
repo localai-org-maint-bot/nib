@@ -21,6 +21,13 @@ func boundary(text string) reasoningEventsMsg {
 	return reasoningEventsMsg{{kind: reasoningEventBoundary, text: text}}
 }
 
+// content wraps one streamed content (assistant-reply) chunk the same way —
+// Callbacks.OnStream's "content" kind, carried on the same reasoningChan as
+// reasoning deltas/boundaries (see reasoningEventContentDelta's doc).
+func content(text string) reasoningEventsMsg {
+	return reasoningEventsMsg{{kind: reasoningEventContentDelta, text: text}}
+}
+
 // TestReasoningDeltaAccumulatesInOrder feeds a sequence of streaming reasoning
 // deltas through Update and asserts they land in m.reasoning concatenated in
 // the order they arrived — a delta pipeline that reorders or drops chunks
@@ -176,11 +183,16 @@ func TestReasoningResetPendingClearsAtTurnEnd(t *testing.T) {
 	}
 }
 
-// TestReasoningResetPendingClearsOnInterrupt: Ctrl+C mid-stream ends the turn
-// via the same responseMsg path but with a context.Canceled error. The flag
-// must not survive that either, or the NEXT turn's first delta would
-// silently inherit reset-then-append state from the interrupted one.
-func TestReasoningResetPendingClearsOnInterrupt(t *testing.T) {
+// TestInterruptedTurnAppendsNoticeAndResetsReasoning: Ctrl+C mid-stream ends
+// the turn via the same responseMsg path but with a context.Canceled error.
+// It exercises the SAME two reasoning-reset lines as
+// TestReasoningResetPendingClearsAtTurnEnd (responseMsg resets
+// m.reasoning/reasoningResetPending unconditionally before branching on
+// msg.err, so those two lines pass or fail in lockstep regardless of which
+// branch runs) — what THIS test actually pins beyond that restatement is the
+// interrupted-transcript line: the "interrupted." notice lands in the
+// transcript instead of the turn's partial reply being silently dropped.
+func TestInterruptedTurnAppendsNoticeAndResetsReasoning(t *testing.T) {
 	m := Model{
 		viewport:  viewport.New(80, 20),
 		width:     80,
@@ -203,6 +215,15 @@ func TestReasoningResetPendingClearsOnInterrupt(t *testing.T) {
 	}
 	if got.reasoningResetPending {
 		t.Fatal("reasoningResetPending leaked past an interrupted turn")
+	}
+	found := false
+	for _, msg := range got.messages {
+		if msg.Role == "agent" && msg.Content == "interrupted." {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("interrupted turn did not append the \"interrupted.\" notice")
 	}
 }
 
@@ -339,5 +360,175 @@ func TestListenReasoningEventsPreservesOrderUnderRealConcurrency(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("event %d = %+v, want %+v — producer order not preserved under real concurrency", i, got[i], want[i])
 		}
+	}
+}
+
+// assistantMessages returns the Content of every "assistant"-role transcript
+// entry, in order — the shape most content-streaming assertions below need.
+func assistantMessages(m Model) []string {
+	var out []string
+	for _, msg := range m.messages {
+		if msg.Role == "assistant" {
+			out = append(out, msg.Content)
+		}
+	}
+	return out
+}
+
+// TestContentDeltaAppendsIntoInProgressAssistantMessage feeds streamed
+// "content" deltas (Callbacks.OnStream's answer-text kind) through Update and
+// asserts they land as ONE assistant transcript message, concatenated in
+// arrival order — the reply growing in place rather than one bubble per
+// delta.
+func TestContentDeltaAppendsIntoInProgressAssistantMessage(t *testing.T) {
+	m := Model{
+		viewport:  viewport.New(80, 20),
+		width:     80,
+		loading:   true,
+		presenter: testPresenter(),
+	}
+
+	var next tea.Model = m
+	for _, chunk := range []string{"The", " quick", " brown", " fox"} {
+		next, _ = next.(Model).Update(content(chunk))
+	}
+
+	got := assistantMessages(next.(Model))
+	want := []string{"The quick brown fox"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("assistant messages = %+v, want %+v (deltas should accumulate into one in-progress message)", got, want)
+	}
+}
+
+// TestContentDeltaIgnoredWhenNoTurnInFlight guards the failure mode a stray,
+// late-arriving content delta would cause: with no turn loading, a delta must
+// not fabricate a new assistant bubble out of nowhere.
+func TestContentDeltaIgnoredWhenNoTurnInFlight(t *testing.T) {
+	m := Model{
+		viewport:  viewport.New(80, 20),
+		width:     80,
+		loading:   false,
+		presenter: testPresenter(),
+	}
+
+	next, _ := m.Update(content("stray tail fragment"))
+	if got := assistantMessages(next.(Model)); len(got) != 0 {
+		t.Fatalf("assistant messages = %+v, want none (delta arrived with no turn in flight)", got)
+	}
+}
+
+// TestResponseMsgReconcilesStreamedReplyWithoutDuplicating is the core
+// duplicate-suppression test: content deltas already built the in-progress
+// assistant message, so the terminal responseMsg — which carries the SAME
+// text as its own payload, exactly like the pre-streaming non-streamed path
+// always has — must reconcile that one message rather than appending a
+// second copy of the reply.
+func TestResponseMsgReconcilesStreamedReplyWithoutDuplicating(t *testing.T) {
+	m := Model{
+		viewport:  viewport.New(80, 20),
+		width:     80,
+		loading:   true,
+		presenter: testPresenter(),
+	}
+
+	next, _ := m.Update(content("Hel"))
+	next, _ = next.(Model).Update(content("lo"))
+	next, _ = next.(Model).Update(responseMsg{content: "Hello"})
+
+	got := assistantMessages(next.(Model))
+	want := []string{"Hello"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("assistant messages = %+v, want %+v (responseMsg must reconcile, not duplicate, the streamed reply)", got, want)
+	}
+}
+
+// TestContentDeltaStartsFreshMessagePerTurn confirms the turn boundary
+// actually closes the in-progress message: a delta streamed for the NEXT
+// turn must start a new assistant bubble, not keep appending onto the
+// previous turn's already-finalized reply.
+func TestContentDeltaStartsFreshMessagePerTurn(t *testing.T) {
+	m := Model{
+		viewport:  viewport.New(80, 20),
+		width:     80,
+		loading:   true,
+		presenter: testPresenter(),
+	}
+
+	next, _ := m.Update(content("first reply"))
+	next, _ = next.(Model).Update(responseMsg{content: "first reply"})
+
+	// Next turn starts.
+	nm := next.(Model)
+	nm.loading = true
+	next, _ = nm.Update(content("second reply"))
+
+	got := assistantMessages(next.(Model))
+	want := []string{"first reply", "second reply"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("assistant messages = %+v, want %+v (second turn must not append onto the first turn's reply)", got, want)
+	}
+}
+
+// TestParkMsgReconcilesStreamedReplyWithoutDuplicating mirrors the
+// responseMsg reconciliation test for the OTHER turn-boundary path: a run
+// that parks mid-stream must fold the already-streamed text into the SAME
+// message the park delivers, not add a second copy — and must still arm
+// lastParkedReply so a later responseMsg carrying the identical final text
+// (a run that parks and then ends with no further generation) does not
+// duplicate it either.
+func TestParkMsgReconcilesStreamedReplyWithoutDuplicating(t *testing.T) {
+	m := Model{
+		viewport:  viewport.New(80, 20),
+		textarea:  textarea.New(),
+		width:     80,
+		loading:   true,
+		presenter: testPresenter(),
+	}
+
+	next, _ := m.Update(content("partial "))
+	next, _ = next.(Model).Update(content("reply"))
+	next, _ = next.(Model).Update(parkMsg{parked: true, reply: "partial reply"})
+
+	got := assistantMessages(next.(Model))
+	want := []string{"partial reply"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("assistant messages = %+v, want %+v (park must reconcile, not duplicate, the streamed reply)", got, want)
+	}
+	if got := next.(Model).lastParkedReply; got != "partial reply" {
+		t.Fatalf("lastParkedReply = %q, want %q", got, "partial reply")
+	}
+
+	// The run parked and then ended with the identical reply and no further
+	// generation: responseMsg must not duplicate it.
+	next, _ = next.(Model).Update(responseMsg{content: "partial reply"})
+	got2 := assistantMessages(next.(Model))
+	if len(got2) != 1 || got2[0] != "partial reply" {
+		t.Fatalf("assistant messages after responseMsg = %+v, want %+v", got2, want)
+	}
+}
+
+// TestStreamingAssistantContentRendersPlainUntilFinalized: partial markdown
+// (an unclosed bold run here) must not be pushed through glamour mid-stream —
+// re-rendering an incomplete document can render wrong — so the raw markers
+// should still be visible in the viewport while streaming. Once responseMsg
+// finalizes the reply, the SAME text renders as real markdown (markers gone).
+func TestStreamingAssistantContentRendersPlainUntilFinalized(t *testing.T) {
+	m := Model{
+		viewport:  viewport.New(80, 20),
+		width:     80,
+		loading:   true,
+		presenter: testPresenter(),
+	}
+
+	next, _ := m.Update(content("**bold"))
+	mid := next.(Model)
+	if out := mid.viewport.View(); !strings.Contains(out, "**bold") {
+		t.Fatalf("mid-stream viewport does not show raw markdown markers: %q", out)
+	}
+
+	next, _ = mid.Update(responseMsg{content: "**bold**"})
+	done := next.(Model)
+	if out := done.viewport.View(); strings.Contains(out, "**bold**") {
+		t.Fatalf("finalized viewport still shows raw markdown markers (glamour not applied): %q", out)
 	}
 }

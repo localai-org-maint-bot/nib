@@ -38,14 +38,44 @@ type ChatMessage struct {
 	AgentID   string // issuing sub-agent, for Role == "tool" (empty = root agent)
 }
 
-// appendMessage appends one or more entries to the transcript. It is a plain
-// convenience wrapper over append — it claims no invariant. (It used to be the
+// appendMessage appends one or more entries to the transcript. Beyond that it
+// claims no invariant over the transcript itself. (It used to be the
 // choke-point a now-deleted []render.Message cache keyed its invalidation on;
 // that cache fed ViewState.Messages, which no Presenter ever read. Nothing
 // stops a caller assigning m.messages directly, and applyResume does exactly
 // that when it rebuilds a restored transcript from scratch.)
+//
+// It does claim one narrow thing of its own: calling it always closes off
+// m.streamingActive. appendStreamedContent is the only caller allowed to
+// mutate the transcript's tail message in place instead of appending; every
+// other append here means that tail is no longer a live streaming target.
 func (m *Model) appendMessage(msgs ...ChatMessage) {
+	m.streamingActive = false
 	m.messages = append(m.messages, msgs...)
+}
+
+// appendStreamedContent applies one live "content" delta (Callbacks.OnStream,
+// via reasoningEventContentDelta) to the transcript: the FIRST delta of a
+// turn starts a new in-progress assistant message, and every delta after that
+// — while streamingActive stays true — appends into that SAME message rather
+// than appending a new one, so the reply grows in place.
+//
+// Guarded on m.loading: a delta arriving with no turn in flight is dropped
+// rather than fabricating a bubble. This is a best-effort guard, not a hard
+// guarantee — reasoningChan's doc explains why content deltas and the events
+// that end a turn (responseMsg, parkMsg) are not synchronized by a channel,
+// only made safe against duplication and, via this guard, against the
+// common shape of a stray post-turn delta.
+func (m *Model) appendStreamedContent(delta string) {
+	if delta == "" || !m.loading {
+		return
+	}
+	if m.streamingActive && len(m.messages) > 0 {
+		m.messages[len(m.messages)-1].Content += delta
+		return
+	}
+	m.appendMessage(ChatMessage{Role: "assistant", Content: delta})
+	m.streamingActive = true
 }
 
 // Model represents the TUI state
@@ -118,6 +148,20 @@ type Model struct {
 	// event, so the terminal responseMsg can avoid re-appending an identical
 	// final reply.
 	lastParkedReply string
+	// streamingActive is true while m.messages' tail entry is an in-progress
+	// assistant reply still receiving live "content" deltas (see
+	// appendStreamedContent). It is the analogue of lastParkedReply for the
+	// streaming path: responseMsg/parkMsg check it to RECONCILE that tail
+	// message with their own authoritative text instead of appending a
+	// second, duplicate copy of the reply.
+	//
+	// appendMessage clears it unconditionally on every call, so any transcript
+	// entry other than a streamed delta mutating its own tail (a tool call, a
+	// turn boundary, an error notice, …) closes the streaming target off —
+	// otherwise a stray, late-arriving delta (see reasoningChan's ordering
+	// doc for why one can race past a turn boundary) could mutate an
+	// unrelated message instead of being safely dropped.
+	streamingActive bool
 	// wakeupGen invalidates pending reminder/self-paced wake-up ticks: a fired
 	// tea.Tick is honored only if its captured gen still matches. Bumped by
 	// /loop stop to cancel a self-paced loop. Poll wake-ups ride pollGen instead.
@@ -348,8 +392,8 @@ type parkMsg parkEvent
 // statusMsg is sent for status updates
 type statusMsg string
 
-// reasoningEventKind distinguishes the two kinds of reasoning update carried
-// on reasoningChan.
+// reasoningEventKind distinguishes the kinds of streamed update carried on
+// reasoningChan.
 type reasoningEventKind int
 
 const (
@@ -359,10 +403,22 @@ const (
 	// reasoningEventBoundary carries the COMPLETE reasoning block for a step
 	// that just ended (Callbacks.OnReasoning).
 	reasoningEventBoundary
+	// reasoningEventContentDelta is one (possibly coalesced) chunk of the
+	// live streamed assistant REPLY (Callbacks.OnStream's "content" kind —
+	// cogito's "answer text delta"). Carried on the SAME reasoningChan as the
+	// two reasoning kinds above for the same reason the boundary/delta split
+	// was fixed: cogito emits every delta for a step (reasoning or content)
+	// from one goroutine, in true order, and a second channel/listener pair
+	// for content would let bubbletea's independent per-Cmd goroutine relay
+	// reorder it relative to the reasoning events — see reasoningChan's doc.
+	// Applied in Update by appendStreamedContent, not by the reasoning-box
+	// logic below.
+	reasoningEventContentDelta
 )
 
-// reasoningEvent is one item read off reasoningChan. The two kinds are
-// handled with different precedence in Update — see reasoningResetPending.
+// reasoningEvent is one item read off reasoningChan. The kinds are handled
+// with different precedence in Update — see reasoningResetPending (for the
+// two reasoning kinds) and streamingActive (for reasoningEventContentDelta).
 type reasoningEvent struct {
 	kind reasoningEventKind
 	text string
@@ -515,30 +571,32 @@ func (m Model) initSession() tea.Cmd {
 				m.reasoningChan <- reasoningEvent{kind: reasoningEventBoundary, text: reasoning}
 			},
 			// OnStream opts the session into cogito's streaming path so the
-			// thinking box fills token-by-token instead of only at step
-			// boundaries (OnReasoning above still fires too — see
-			// reasoningResetPending's doc for how the two are reconciled).
+			// thinking box AND the assistant's reply both fill progressively
+			// instead of only at step boundaries / turn end (OnReasoning and
+			// the terminal responseMsg/parkMsg still fire too — see
+			// reasoningResetPending's doc for reasoning, streamingActive's for
+			// content).
 			//
 			// chat.StreamEvent.Kind is string(cogito.StreamEvent.Type); cogito
 			// defines exactly these values (cogito's stream.go):
 			// "reasoning", "content", "tool_call", "tool_result", "status",
-			// "done", "error", "sub_agent". Only "reasoning" is handled here —
-			// it is the live counterpart to OnReasoning. "content" (the
-			// assistant's streamed answer) is deliberately left unhandled:
-			// streaming the reply into the transcript is Task 24, not this
-			// one. The rest (tool_call/tool_result/status/done/error/
-			// sub_agent) have no bearing on the reasoning box.
+			// "done", "error", "sub_agent". "reasoning" and "content" are the
+			// two handled here — the live counterparts to OnReasoning and the
+			// final reply, respectively. The rest (tool_call/tool_result/
+			// status/done/error/sub_agent) have no handler yet.
 			//
-			// Sent onto the SAME reasoningChan as OnReasoning above (not a
-			// separate channel) — see reasoningChan's doc for why: cogito
+			// Both are sent onto the SAME reasoningChan (not separate
+			// channels per kind) — see reasoningChan's doc for why: cogito
 			// emits every delta for a step and only then fires the boundary,
-			// both from one goroutine, so one channel is what makes Update
+			// all from one goroutine, so one channel is what makes Update
 			// observe them in that same order.
 			OnStream: func(ev chat.StreamEvent) {
-				if ev.Kind != "reasoning" {
-					return
+				switch ev.Kind {
+				case "reasoning":
+					m.reasoningChan <- reasoningEvent{kind: reasoningEventDelta, text: ev.Content}
+				case "content":
+					m.reasoningChan <- reasoningEvent{kind: reasoningEventContentDelta, text: ev.Content}
 				}
-				m.reasoningChan <- reasoningEvent{kind: reasoningEventDelta, text: ev.Content}
 			},
 			OnToolCall: func(req chat.ToolCallRequest) chat.ToolCallResponse {
 				// Send tool request and wait for user response
@@ -1067,6 +1125,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		m.reasoning = ""
 		m.reasoningResetPending = false
+		// Snapshot the in-progress streamed message's index, if any, BEFORE
+		// appendMessage below (blocked-attachment notices) has a chance to
+		// clear streamingActive as its own side effect. append only grows
+		// m.messages, so this index stays valid however many entries land
+		// after it.
+		streamIdx := -1
+		if m.streamingActive && len(m.messages) > 0 {
+			streamIdx = len(m.messages) - 1
+		}
+		m.streamingActive = false
 		// Surface any attachments that couldn't be sent (blocked by model caps
 		// or resolution), mirroring the CLI's per-file error lines.
 		for _, b := range msg.blocked {
@@ -1084,10 +1152,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.err = msg.err
 				m.appendMessage(ChatMessage{Role: "error", Content: msg.err.Error()})
 			}
-		} else if content := strings.TrimSpace(msg.content); content != "" && content != m.lastParkedReply {
-			// Skip the final reply when it duplicates the text already surfaced at
-			// the park gate (a run that parked and returned with the same answer).
-			m.appendMessage(ChatMessage{Role: "assistant", Content: msg.content})
+		} else if content := strings.TrimSpace(msg.content); content != "" {
+			switch {
+			case streamIdx >= 0:
+				// The reply already streamed into the transcript as it arrived
+				// (see appendStreamedContent): reconcile that message with the
+				// authoritative final text — self-healing against any dropped
+				// delta — instead of appending it a second time.
+				m.messages[streamIdx].Content = msg.content
+			case content != m.lastParkedReply:
+				// Skip the final reply when it duplicates the text already surfaced
+				// at the park gate (a run that parked and returned with the same
+				// answer, with nothing streamed since).
+				m.appendMessage(ChatMessage{Role: "assistant", Content: msg.content})
+			}
 		}
 		m.lastParkedReply = ""
 		if m.session != nil {
@@ -1119,8 +1197,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// work pending, or ready for a follow-up). Surface the reply as a
 			// durable transcript line and unlock the composer so the user can keep
 			// chatting — their input injects into this same run.
+			//
+			// If the reply already streamed in (appendStreamedContent), reconcile
+			// that in-progress message with the authoritative parked text instead
+			// of appending it a second time — the same precedence responseMsg
+			// applies, for the same reason (see streamingActive's doc).
+			streamIdx := -1
+			if m.streamingActive && len(m.messages) > 0 {
+				streamIdx = len(m.messages) - 1
+			}
+			m.streamingActive = false
 			reply := strings.TrimSpace(msg.reply)
-			if reply != "" && reply != m.lastParkedReply {
+			switch {
+			case streamIdx >= 0 && reply != "":
+				m.messages[streamIdx].Content = reply
+				m.lastParkedReply = reply
+			case streamIdx < 0 && reply != "" && reply != m.lastParkedReply:
 				m.appendMessage(ChatMessage{Role: "assistant", Content: reply})
 				m.lastParkedReply = reply
 			}
@@ -1309,6 +1401,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.reasoningResetPending = false
 				}
 				m.reasoning += ev.text
+			case reasoningEventContentDelta:
+				m.appendStreamedContent(ev.text)
 			}
 		}
 		m.updateViewport()
@@ -2438,7 +2532,20 @@ func (m *Model) updateViewport() {
 			// Presenter owns — pre-render it here at the width the presenter's
 			// prefix will leave for content, matching its own prefix exactly.
 			mdWidth := presenter.ContentWidth(render.RoleAssistant, contentWidth)
-			rendered := renderMarkdownWith(m.markdownFor(mdWidth), msg.Content, mdWidth)
+			var rendered string
+			if m.streamingActive && i == len(m.messages)-1 {
+				// This message is still receiving live content deltas.
+				// Re-running glamour on every delta would re-parse an
+				// incomplete document each frame (wasted work) and can render
+				// visibly wrong mid-token (an unclosed code fence, a
+				// half-written list) — so show the growing text plain until
+				// the turn ends and this message is reconciled/finalized
+				// (responseMsg/parkMsg), at which point it is no longer the
+				// streaming tail and gets the full glamour pass below.
+				rendered = render.Wrap(msg.Content, mdWidth)
+			} else {
+				rendered = renderMarkdownWith(m.markdownFor(mdWidth), msg.Content, mdWidth)
+			}
 			sb.WriteString(presenter.Message(render.Message{Role: render.RoleAssistant, Content: rendered}, prevRole, contentWidth))
 			prevRole = render.RoleAssistant
 		case "agent":
