@@ -2438,9 +2438,11 @@ func (m Model) helpLine() string {
 		return theme.HelpApproval
 	case m.awaitingAsk:
 		return theme.HelpAsk
-	case m.awaitingResume && m.resumeDeleteArmed:
-		return theme.ResumeDeleteConfirm
 	case m.awaitingResume:
+		// theme.ResumeDeleteConfirm (while armed) lives in the dialog's own
+		// Hint, adjacent to the row being deleted (see buildResumeDialog) —
+		// the footer keeps showing the key list unconditionally so the user
+		// never loses sight of which key cancels the arm.
 		return theme.HelpResume
 	case m.parked:
 		return "enter add a follow-up · ctrl+c interrupt · ctrl+o logs"
