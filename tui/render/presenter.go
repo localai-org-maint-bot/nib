@@ -17,6 +17,7 @@ type Caps struct {
 // lives on ViewState.Spinner/Status, the single source of truth for both
 // (rather than duplicating them onto the narrower Reasoning type). A
 // Presenter should render nothing when !v.Loading.
+//
 // ContentWidth exists because some content is rendered before it reaches a
 // Presenter: markdown is glamour output, and glamour is width-cached state the
 // model owns, so the model must know at what width to render. That width is
