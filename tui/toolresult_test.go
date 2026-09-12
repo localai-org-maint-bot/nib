@@ -17,7 +17,7 @@ import (
 func TestToolResultMessageRenders(t *testing.T) {
 	t.Run("renders tool role inline", func(t *testing.T) {
 		m := newTestModel(Model{viewport: viewport.New(80, 10)})
-		m.messages = append(m.messages, ChatMessage{Role: "tool", Name: "bash", Content: "hello\nworld"})
+		m = withMessages(m, ChatMessage{Role: "tool", Name: "bash", Content: "hello\nworld"})
 		m.updateViewport()
 
 		out := m.viewport.View()
@@ -52,7 +52,7 @@ func TestToolResultMessageRenders(t *testing.T) {
 
 	t.Run("sub-agent final result renders indented under its thread", func(t *testing.T) {
 		m := newTestModel(Model{viewport: viewport.New(80, 10)})
-		m.messages = append(m.messages, ChatMessage{Role: "agent_result", Name: "explore", AgentID: "agent1234", Content: "done"})
+		m = withMessages(m, ChatMessage{Role: "agent_result", Name: "explore", AgentID: "agent1234", Content: "done"})
 		m.updateViewport()
 		out := m.viewport.View()
 		if !strings.Contains(out, theme.Arrow) {

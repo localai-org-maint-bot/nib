@@ -216,7 +216,7 @@ func TestRedispatchGoesFirstWithoutEcho(t *testing.T) {
 	// second transcript echo.
 	m.redispatch = []string{"whats 2+2?"}
 	m.queue = []string{"and another"}
-	m.messages = []ChatMessage{{Role: "user", Content: "whats 2+2?"}}
+	m = withMessages(m, ChatMessage{Role: "user", Content: "whats 2+2?"})
 
 	next, cmd := m.Update(responseMsg{content: "done"})
 	nm := next.(Model)

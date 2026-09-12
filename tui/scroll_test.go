@@ -13,7 +13,7 @@ import (
 // height, so scrolling is meaningful.
 func fillMessages(m *Model, n int) {
 	for i := 0; i < n; i++ {
-		m.messages = append(m.messages, ChatMessage{Role: "user", Content: "history line"})
+		m.appendMessage(ChatMessage{Role: "user", Content: "history line"})
 	}
 }
 
@@ -33,7 +33,7 @@ func TestUpdateViewportPreservesScrollWhenNotAtBottom(t *testing.T) {
 
 	// A re-render (spinner tick, status change, streamed token) must NOT yank the
 	// user back to the bottom while they're reading history.
-	m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "newly arrived"})
+	m = withMessages(m, ChatMessage{Role: "agent", Content: "newly arrived"})
 	m.updateViewport()
 
 	if m.viewport.YOffset != 0 {
@@ -52,7 +52,7 @@ func TestUpdateViewportFollowsWhenAtBottom(t *testing.T) {
 
 	// New content while parked at the bottom should keep following.
 	for i := 0; i < 5; i++ {
-		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "streamed"})
+		m = withMessages(m, ChatMessage{Role: "agent", Content: "streamed"})
 	}
 	m.updateViewport()
 
@@ -71,7 +71,7 @@ func TestResizeRewrapsAndClamps(t *testing.T) {
 		height:   24,
 	})
 	// One long message so the wrap width visibly changes the line count.
-	m.messages = append(m.messages, ChatMessage{
+	m = withMessages(m, ChatMessage{
 		Role:    "assistant",
 		Content: strings.Repeat("wrap me across several lines. ", 40),
 	})
@@ -110,7 +110,7 @@ func TestResizeAtBottomStaysFollowing(t *testing.T) {
 		height:   24,
 	})
 	for i := 0; i < 60; i++ {
-		m.messages = append(m.messages, ChatMessage{Role: "user", Content: "history line"})
+		m = withMessages(m, ChatMessage{Role: "user", Content: "history line"})
 	}
 	m.updateViewport()
 	m.viewport.GotoBottom()
@@ -135,7 +135,7 @@ func TestUpdateViewportFollowSnapsToBottom(t *testing.T) {
 	m.updateViewport()
 	m.viewport.SetYOffset(0)
 
-	m.messages = append(m.messages, ChatMessage{Role: "user", Content: "a new question"})
+	m = withMessages(m, ChatMessage{Role: "user", Content: "a new question"})
 	m.updateViewportFollow()
 
 	if !m.viewport.AtBottom() {
@@ -151,7 +151,7 @@ func TestForceFollowIsOneShot(t *testing.T) {
 	m.updateViewportFollow()
 
 	m.viewport.SetYOffset(0)
-	m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "streamed"})
+	m = withMessages(m, ChatMessage{Role: "agent", Content: "streamed"})
 	m.updateViewport()
 
 	if m.viewport.YOffset != 0 {

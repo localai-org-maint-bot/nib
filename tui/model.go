@@ -311,7 +311,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		textarea:         ta,
 		spinner:          s,
 		presenter:        p,
-		msgViewCache:     &messageProjCache{},
+		msgViewCache:     &messageProjCache{rev: -1},
 		messages:         []ChatMessage{},
 		ctx:              ctx,
 		cancel:           cancel,
@@ -1718,6 +1718,10 @@ func (m Model) currentDialogs() []render.Dialog {
 // copy shares the same pointee, so the cache persists across frames without
 // needing a pointer-receiver Model. nil on a bare Model{} literal, as many
 // tests construct — projectedMessages falls back to an uncached build then.
+// rev must start at -1, not 0: msgRev also starts at 0, so a zero-valued
+// cache reads as a HIT holding a nil projection before anything has ever been
+// projected. That was only harmless while the transcript happened to be empty
+// at that moment, which nothing guarantees.
 type messageProjCache struct {
 	rev  int
 	msgs []render.Message
