@@ -122,8 +122,13 @@ func buildResumeDialog(list *render.SelectList) render.Dialog {
 // otherwise it lists sessions (cwd-scoped unless all) and opens the picker,
 // or reports theme.ResumeEmpty if there is nothing to show. Errors from the
 // store (a bad --resume id, a broken sessions directory) are reported as a
-// transcript error line rather than silently doing nothing.
+// transcript error line rather than silently doing nothing. The nil guard on
+// m.store is defensive only — NewModel always sets it — but matches
+// recordSession's own guard so the two don't drift.
 func (m *Model) startResume(all bool, id string) tea.Cmd {
+	if m.store == nil {
+		return nil
+	}
 	if id != "" {
 		rec, err := m.store.Load(id)
 		if err != nil {
