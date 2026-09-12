@@ -1723,15 +1723,60 @@ func (m Model) projectedMessages() []render.Message {
 	return out
 }
 
-// viewState builds the full ViewState for the current frame: every field
-// populated from Model state (I1), so a Presenter driven from one ViewState —
-// an alt-screen full-frame compositor, for instance — never finds a field it
-// needs left at its zero value. View additionally sets the viewport-derived
-// Footer fields (Help, Badges, Err, Footers, NewOutput) that only it computes.
+// showingViewport reports whether the body area is the conversation viewport,
+// rather than the log viewer or the first-run empty state. View reads it to
+// pick the body; viewState reads it to resolve NewOutput (which is only
+// meaningful when the viewport is on screen at all). One definition, so the
+// two can never disagree about what the body is.
+func (m Model) showingViewport() bool {
+	if m.showLogs {
+		return false
+	}
+	return len(m.messages) > 0 || m.loading || m.awaitingApproval || m.awaitingAsk
+}
+
+// footerRows builds the job-status footer rows — active sub-agent jobs, shell
+// jobs, cron loops, the active goal — in the order they are rendered. Empty
+// while the log viewer owns the body, which hides the footer entirely.
+func (m Model) footerRows() []render.FooterRow {
+	if m.showLogs {
+		return nil
+	}
+	var rows []render.FooterRow
+	if row, ok := jobsFooterRow(m.jobs); ok {
+		rows = append(rows, row)
+	}
+	if row, ok := shellJobsFooterRow(m.shellJobs.List()); ok {
+		rows = append(rows, row)
+	}
+	if row, ok := loopsFooterRow(m.loops, m.selfPaced); ok {
+		rows = append(rows, row)
+	}
+	if m.session != nil {
+		if row, ok := goalFooterRow(m.session.Goal()); ok {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+// viewState builds the complete ViewState for the current frame: every field
+// populated from Model state, so a Presenter driven from one ViewState — an
+// alt-screen full-frame compositor, for instance — never finds a field it
+// needs left at its zero value, and so Header and Footer are never handed two
+// different projections of the same frame. View builds one of these and
+// mutates nothing; updateDimensions budgets the layout against the same value
+// View will render from.
 func (m Model) viewState() render.ViewState {
 	status := m.status
 	if status == "" || status == "Thinking..." {
 		status = theme.VerbThinking
+	}
+
+	help := theme.Help.Render(m.helpLine())
+	errText := ""
+	if m.err != nil {
+		errText = m.err.Error()
 	}
 
 	return render.ViewState{
@@ -1746,6 +1791,13 @@ func (m Model) viewState() render.ViewState {
 		Messages:    m.projectedMessages(),
 		Reasoning:   render.Reasoning{Text: m.reasoning},
 		Dialogs:     m.currentDialogs(),
+		Help:        help,
+		Badges:      m.footerBadges(lipgloss.Width(help)),
+
+		// New content arrived below the fold while the user was scrolled up.
+		NewOutput: m.showingViewport() && !m.viewport.AtBottom(),
+		Err:       errText,
+		Footers:   m.footerRows(),
 	}
 }
 
@@ -1753,6 +1805,11 @@ func (m *Model) updateViewport() {
 	var sb strings.Builder
 
 	presenter := m.presenter
+
+	// One ViewState for this pass, shared by every block rendered below —
+	// building it twice would re-run currentDialogs, the footer-row builders
+	// and the message projection for the same frame.
+	vs := m.viewState()
 
 	// Calculate available width for content (use viewport width, not terminal width)
 	contentWidth := m.viewport.Width
@@ -1836,14 +1893,11 @@ func (m *Model) updateViewport() {
 		}
 	}
 
-	// vs carries everything Reasoning/Dialog need (and, for I1 completeness,
-	// everything Header/Footer need too, even though this function never calls
-	// those). Reasoning renders nothing when !vs.Loading, so the call is
+	// Reasoning renders nothing when !vs.Loading, so the call is
 	// unconditional; Dialogs renders each pending dialog in turn (ordinarily
 	// zero or one, but a background sub-agent's tool approval and a
 	// foreground ask_user question can both be pending at once — see
 	// currentDialogs — and the original hand-rolled code rendered both).
-	vs := m.viewState()
 	sb.WriteString(presenter.Reasoning(vs, contentWidth))
 	for _, d := range vs.Dialogs {
 		sb.WriteString(presenter.Dialog(d, contentWidth))
@@ -1870,6 +1924,18 @@ func (m Model) View() string {
 	}
 
 	presenter := m.presenter
+	// One complete ViewState for the whole frame. Nothing below mutates it:
+	// Header and Footer must see the same projection, or a full-frame
+	// Presenter that composes from a single ViewState gets zero-valued
+	// footers.
+	//
+	// updateViewport builds its own during Update rather than sharing this
+	// one, and deliberately so: NewOutput is resolved from the viewport's
+	// scroll position, which updateViewport itself moves (SetContent, then
+	// GotoBottom or SetYOffset) AFTER it has built its ViewState, and which
+	// the tail of Update can move again. A value cached across the two would
+	// be stale by construction. Each phase builds one and shares it within
+	// itself.
 	vs := m.viewState()
 
 	var sb strings.Builder
@@ -1879,14 +1945,12 @@ func (m Model) View() string {
 	sb.WriteString(presenter.Header(vs))
 
 	// Body: log viewer, first-run empty state, otherwise the conversation viewport.
-	showingViewport := false
 	if m.showLogs {
 		sb.WriteString(m.renderLogsViewer())
-	} else if len(m.messages) == 0 && !m.loading && !m.awaitingApproval && !m.awaitingAsk {
+	} else if !m.showingViewport() {
 		sb.WriteString(renderEmptyState(m.width))
 	} else {
 		sb.WriteString(m.viewport.View())
-		showingViewport = true
 	}
 	sb.WriteString("\n")
 
@@ -1920,33 +1984,9 @@ func (m Model) View() string {
 
 	// Footer: new-output marker (scroll-position signal — content arrived below
 	// the fold while the user was reading history), help/badges line, error
-	// line, and the job-status footer rows. Hidden while the log viewer owns
-	// the body. Reuses the same vs Header rendered from (I1): one ViewState per
-	// frame, not two disjoint partial ones.
-	vs.NewOutput = showingViewport && !m.viewport.AtBottom()
-	vs.Help = theme.Help.Render(m.helpLine())
-	vs.Badges = m.footerBadges(lipgloss.Width(vs.Help))
-	if m.err != nil {
-		vs.Err = m.err.Error()
-	}
-	if !m.showLogs {
-		var footers []render.FooterRow
-		if row, ok := jobsFooterRow(m.jobs); ok {
-			footers = append(footers, row)
-		}
-		if row, ok := shellJobsFooterRow(m.shellJobs.List()); ok {
-			footers = append(footers, row)
-		}
-		if row, ok := loopsFooterRow(m.loops, m.selfPaced); ok {
-			footers = append(footers, row)
-		}
-		if m.session != nil {
-			if row, ok := goalFooterRow(m.session.Goal()); ok {
-				footers = append(footers, row)
-			}
-		}
-		vs.Footers = footers
-	}
+	// line, and the job-status footer rows. All of it already on vs — the same
+	// value Header rendered from, and the same one updateDimensions budgeted
+	// the viewport's height against.
 	sb.WriteString(presenter.Footer(vs, m.width))
 
 	return sb.String()
