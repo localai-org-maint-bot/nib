@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/tui/render"
 	"github.com/mudler/nib/tui/render/full"
 	"github.com/mudler/nib/tui/render/inline"
@@ -487,10 +488,23 @@ func TestReasoningStructuralEquivalence(t *testing.T) {
 		}
 	}
 
+	// collapsedTrace is 8 lines; MaxLines below caps it to the trailing 3
+	// (lines 6-8), hiding 5 (lines 1-5). wantHint mirrors exactly what both
+	// Reasoning implementations compose from theme.ReasoningMore/Expand, so a
+	// hint-composition regression in either surface fails this, not just a
+	// generic "some text changed" fingerprint drift.
+	collapsedTrace := "line-1\nline-2\nline-3\nline-4\nline-5\nline-6\nline-7\nline-8"
+	wantHint := "… 5" + theme.ReasoningMore + theme.ReasoningExpand
+
 	cases := []struct {
 		name   string
 		state  render.ViewState
 		tokens []string
+		// absent lists substrings that must NOT survive into the output — the
+		// collapsed box's whole point is that the head is dropped, not merely
+		// that the tail is present (a bug that showed everything would also
+		// pass a tokens-only check).
+		absent []string
 	}{
 		{
 			name:   "indicator only",
@@ -502,6 +516,22 @@ func TestReasoningStructuralEquivalence(t *testing.T) {
 			state:  render.ViewState{Loading: true, Spinner: "|", Status: "Working", Reasoning: render.Reasoning{Text: "thinking about it"}},
 			tokens: []string{"|", "Working", "thinking about it"},
 		},
+		{
+			// Pins CollapsibleBox's tail-anchoring end to end through BOTH
+			// presenters, not just inline (which tui/reasoning_test.go already
+			// covers via the model). Without this case, full's own collapsing
+			// branch was invoked by no test in the suite: TestReasoningStruc-
+			// turalEquivalence never set Collapsed/MaxLines, so it only ever
+			// exercised the pass-through (uncapped) path, and full.Reasoning
+			// could regress independently of inline with nothing to catch it.
+			name: "collapsed reasoning trace tails, does not head",
+			state: render.ViewState{
+				Loading: true, Spinner: "|", Status: "Working",
+				Reasoning: render.Reasoning{Text: collapsedTrace, Collapsed: true, MaxLines: 3},
+			},
+			tokens: []string{"|", "Working", "line-6", "line-7", "line-8", wantHint},
+			absent: []string{"line-1", "line-2", "line-3", "line-4", "line-5"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -510,6 +540,11 @@ func TestReasoningStructuralEquivalence(t *testing.T) {
 				out := p.Reasoning(tc.state, w)
 				assertPreserves(t, name, out, tc.tokens)
 				assertFitsWidth(t, name, out, w)
+				for _, tok := range tc.absent {
+					if strings.Contains(stripANSI(out), tok) {
+						t.Errorf("%s collapsed box leaked hidden content %q: %q", name, tok, out)
+					}
+				}
 				fps[name] = fingerprintOf(out, tc.tokens)
 			}
 			assertSameFingerprint(t, fps)

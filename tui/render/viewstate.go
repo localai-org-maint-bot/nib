@@ -39,10 +39,10 @@ type Message struct {
 // ViewState.Status — kept there only, so there is exactly one source of
 // truth for them.
 //
-// Collapsed and MaxLines have no producer or consumer yet: Phase 3 Task 10
-// (collapsible reasoning) is what populates and reads them. Kept and
-// documented now rather than added speculatively later, since the plan
-// already commits to that task.
+// Collapsed and MaxLines are populated by the model's viewState() (Phase 3
+// Task 10, collapsible reasoning) from Model.reasoningCollapsed and
+// theme.ReasoningMaxLines, and read by both presenters' Reasoning to build a
+// render.CollapsibleBox.
 type Reasoning struct {
 	Text      string
 	Collapsed bool

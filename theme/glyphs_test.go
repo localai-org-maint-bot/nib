@@ -60,7 +60,7 @@ func TestApplyGlyphProfile(t *testing.T) {
 	t.Cleanup(applyGlyphProfile)
 
 	swappable := func() []string {
-		return []string{PromptGlyph, ApprovalGutter, SubAgent, Arrow, Loop, ShellJob, ScrollKeys, ReasoningGlyph, NewOutputGlyph, HairlineGlyph}
+		return []string{PromptGlyph, ApprovalGutter, SubAgent, Arrow, Loop, ShellJob, ScrollKeys, ReasoningGlyph, NewOutputGlyph, HairlineGlyph, BoxRule}
 	}
 
 	t.Setenv("NIB_ASCII", "1")
@@ -105,5 +105,29 @@ func TestHairlineRespectsGlyphProfile(t *testing.T) {
 	// A degenerate width must still produce a rule, never the empty string.
 	if got := lipgloss.Width(Hairline(0)); got != 1 {
 		t.Errorf("Hairline(0) width = %d, want 1", got)
+	}
+}
+
+// TestBoxRuleRespectsGlyphProfile pins the collapsed reasoning box's side
+// rule to the same restricted-terminal contract as every other swappable
+// glyph: ASCII on the Linux VT console, the typographic mark otherwise. This
+// is what TestApplyGlyphProfile's swappable() list already checks generically
+// (BoxRule is included there); this test additionally pins the exact ASCII
+// stand-in ("|"), the same way TestHairlineRespectsGlyphProfile does for
+// HairlineGlyph, so a future edit that desyncs the restricted branch fails on
+// content, not just on "is it ASCII".
+func TestBoxRuleRespectsGlyphProfile(t *testing.T) {
+	t.Cleanup(applyGlyphProfile)
+
+	t.Setenv("NIB_ASCII", "1")
+	applyGlyphProfile()
+	if BoxRule != "|" {
+		t.Errorf("BoxRule = %q on a restricted terminal, want %q", BoxRule, "|")
+	}
+
+	t.Setenv("NIB_ASCII", "0")
+	applyGlyphProfile()
+	if BoxRule != "│" {
+		t.Errorf("BoxRule = %q on a full-glyph terminal, want %q", BoxRule, "│")
 	}
 }
