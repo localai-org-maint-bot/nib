@@ -764,7 +764,40 @@ func TestFrameStructuralEquivalence(t *testing.T) {
 	assertSameFingerprint(t, fps)
 }
 
-// NOTE: selection-marking conformance is deliberately NOT asserted here.
-// At this task `Dialog` is the legacy ask block moved verbatim — static text
-// that ignores `Selected`. Selection rendering arrives in Phase 3 Task 11, and
-// the conformance test for it lands there with the behaviour it guards.
+// TestAllPresentersMarkDialogSelection: the selected option must be visually
+// distinguishable in every surface, however each one chooses to mark it.
+// Moved here from Phase 2 Task 7 by controller ruling: it asserts behaviour
+// that only exists once Phase 3 Task 11 (the ask_user dialog) lands.
+func TestAllPresentersMarkDialogSelection(t *testing.T) {
+	d := render.Dialog{
+		Kind:  render.DialogAsk,
+		Title: "pick one",
+		// Options is []render.DialogOption{Text, Emphasis} — the explicit shape
+		// adopted in Phase 2 Task 6's fix round, replacing positional styling.
+		Options: []render.DialogOption{
+			{Text: "alpha"}, {Text: "beta"}, {Text: "gamma"},
+		},
+		Selected: 1,
+	}
+	for name, p := range presenters() {
+		t.Run(name, func(t *testing.T) {
+			out := p.Dialog(d, 80)
+			lines := strings.Split(out, "\n")
+			var betaLine, alphaLine string
+			for _, l := range lines {
+				if strings.Contains(l, "beta") {
+					betaLine = l
+				}
+				if strings.Contains(l, "alpha") {
+					alphaLine = l
+				}
+			}
+			if betaLine == "" || alphaLine == "" {
+				t.Fatalf("%s did not render all options: %q", name, out)
+			}
+			if betaLine == strings.Replace(alphaLine, "alpha", "beta", 1) {
+				t.Errorf("%s renders the selected option identically to an unselected one: %q", name, betaLine)
+			}
+		})
+	}
+}

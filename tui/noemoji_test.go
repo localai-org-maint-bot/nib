@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/tui/render"
 )
 
 // containsEmoji reports whether s contains a rune in the common emoji ranges.
@@ -19,13 +20,12 @@ func containsEmoji(s string) bool {
 // TestNoEmojiInRenderHelpers guards the calm, no-emoji editorial voice: the
 // user-facing render helpers must not emit emoji glyphs.
 func TestNoEmojiInRenderHelpers(t *testing.T) {
-	// renderAsk header + options.
-	ask := renderAsk(chat.AskRequest{
-		Question: "Pick one",
-		Options:  []string{"alpha", "beta"},
-	}, 80)
+	// The ask_user dialog: question + options, rendered through the presenter
+	// (buildAskDialog replaced the old renderAsk plain-text block).
+	req := chat.AskRequest{Question: "Pick one", Options: []string{"alpha", "beta"}}
+	ask := testPresenter().Dialog(buildAskDialog(req, &render.SelectList{Items: req.Options}), 80)
 	if containsEmoji(ask) {
-		t.Fatalf("renderAsk output contains emoji: %q", ask)
+		t.Fatalf("ask dialog output contains emoji: %q", ask)
 	}
 
 	// Jobs footer (running/done/failed counts). jobsFooterRow is the live path

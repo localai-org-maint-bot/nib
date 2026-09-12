@@ -167,8 +167,16 @@ type Model struct {
 	approvalEditing bool
 
 	// ask_user state
-	pendingAsk      *chat.AskRequest
-	awaitingAsk     bool
+	pendingAsk  *chat.AskRequest
+	awaitingAsk bool
+	// askList holds the live selection state for a pending ask_user question —
+	// which row is highlighted (single-select) or checked (multi-select). Built
+	// alongside pendingAsk in the askMsg branch, cleared alongside it once the
+	// question is answered (see resolveAsk). nil whenever awaitingAsk is false;
+	// every call site guards on it being non-nil rather than assuming
+	// awaitingAsk implies it, since a Model built directly (tests, a bare
+	// Model{} literal) may set one without the other.
+	askList         *render.SelectList
 	askRequestChan  chan chat.AskRequest
 	askResponseChan chan string
 	wakeupChan      chan chat.WakeupRequest
@@ -582,6 +590,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		// ask_user is a keyboard-navigable dialog, the same idiom as tool
+		// approval above: up/down move the highlighted option, space toggles a
+		// multi-select check (enter answers — handled in the KeyEnter case
+		// below, since it must also accept the free-text escape hatch). Esc
+		// cancels unconditionally: it is never a character someone types as an
+		// answer, so — unlike the navigation keys — it needs no composer-empty
+		// guard. Navigation only claims a key when the composer is empty,
+		// exactly like G/End elsewhere in this switch, because up/down/space
+		// are also ordinary characters someone might be typing as their answer.
+		if m.awaitingAsk && m.askList != nil {
+			if msg.Type == tea.KeyEsc {
+				return m.resolveAsk("")
+			}
+			if strings.TrimSpace(m.textarea.Value()) == "" {
+				switch msg.Type {
+				case tea.KeyUp:
+					m.askList.Move(-1)
+					m.updateViewport()
+					return m, nil
+				case tea.KeyDown:
+					m.askList.Move(1)
+					m.updateViewport()
+					return m, nil
+				case tea.KeySpace:
+					if m.askList.MultiSelect {
+						m.askList.Toggle()
+						m.updateViewport()
+						return m, nil
+					}
+				}
+			}
+		}
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			// First Ctrl+C on an in-flight turn interrupts the request but keeps
@@ -723,26 +763,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			// Answering a pending ask_user question does not require a live
+			// session — the session is what's blocked waiting for this very
+			// answer — so it is resolved before the sessionReady gate below,
+			// which only guards starting a NEW turn. An empty composer answers
+			// with the dialog's current pick (or checked set, for multi-select);
+			// anything typed is the free-text escape hatch, unchanged from
+			// before this dialog existed.
+			if m.awaitingAsk && m.pendingAsk != nil {
+				if strings.TrimSpace(m.textarea.Value()) == "" {
+					if m.askList != nil && len(m.askList.Items) > 0 {
+						if answer := m.askList.Answer(); answer != "" {
+							return m.resolveAsk(answer)
+						}
+					}
+					// No options to pick from, or (multi-select) nothing checked
+					// yet: fall through to the empty-input no-op below, same as
+					// the old behaviour.
+				} else {
+					return m.resolveAsk(parseAskAnswer(m.textarea.Value(), *m.pendingAsk))
+				}
+			}
+
 			if !m.sessionReady {
 				return m, nil
 			}
 
 			input := strings.TrimSpace(m.textarea.Value())
 			if input == "" {
-				return m, nil
-			}
-
-			// Check if we're answering an ask_user question
-			if m.awaitingAsk && m.pendingAsk != nil {
-				answer := parseAskAnswer(m.textarea.Value(), *m.pendingAsk)
-				m.appendMessage(ChatMessage{Role: "user", Content: answer})
-				m.textarea.Reset()
-				m.awaitingAsk = false
-				m.pendingAsk = nil
-				m.loading = true
-				m.status = "Thinking…"
-				m.updateViewportFollow()
-				m.askResponseChan <- answer
 				return m, nil
 			}
 
@@ -1055,6 +1103,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		req := chat.AskRequest(msg)
 		m.pendingAsk = &req
 		m.awaitingAsk = true
+		m.askList = &render.SelectList{
+			Items:       req.Options,
+			MultiSelect: req.MultiSelect,
+			MaxVisible:  8,
+		}
+		if req.MultiSelect {
+			m.askList.Checked = make([]bool, len(req.Options))
+		}
 		m.loading = false
 		m.textarea.Focus()
 		m.updateViewport()
@@ -1496,6 +1552,24 @@ func (m Model) resolveApproval(resp chat.ToolCallResponse) (tea.Model, tea.Cmd) 
 	}
 }
 
+// resolveAsk finalizes an ask_user answer — echoing it to the transcript,
+// tearing down the pending-ask state (including the dialog's selection list),
+// resuming the spinner, and handing the answer to the blocked
+// askResponseChan reader. Shared by the dialog-pick and free-text branches of
+// the KeyEnter case, which used to each duplicate this teardown inline.
+func (m Model) resolveAsk(answer string) (tea.Model, tea.Cmd) {
+	m.appendMessage(ChatMessage{Role: "user", Content: answer})
+	m.textarea.Reset()
+	m.awaitingAsk = false
+	m.pendingAsk = nil
+	m.askList = nil
+	m.loading = true
+	m.status = "Thinking…"
+	m.updateViewportFollow()
+	m.askResponseChan <- answer
+	return m, nil
+}
+
 // updateDimensions re-budgets every component against the current terminal
 // size. The footer's share of that budget is not a constant: Presenter.Footer
 // emits between one row (the help line alone) and seven (new-output marker,
@@ -1823,13 +1897,10 @@ func (m Model) currentDialogs() []render.Dialog {
 			Options:          options,
 		})
 	}
-	// Guarded the same way as the approval branch above: renderAsk actually
-	// runs only when a question is pending, not on every frame.
+	// Guarded the same way as the approval branch above: buildAskDialog
+	// actually runs only when a question is pending, not on every frame.
 	if m.awaitingAsk && m.pendingAsk != nil {
-		dialogs = append(dialogs, render.Dialog{
-			Kind:  render.DialogAsk,
-			Title: renderAsk(*m.pendingAsk, m.width),
-		})
+		dialogs = append(dialogs, buildAskDialog(*m.pendingAsk, m.askList))
 	}
 	return dialogs
 }
@@ -2198,6 +2269,8 @@ func (m Model) helpLine() string {
 		return theme.HelpApprovalEdit
 	case m.awaitingApproval:
 		return theme.HelpApproval
+	case m.awaitingAsk:
+		return theme.HelpAsk
 	case m.parked:
 		return "enter add a follow-up · ctrl+c interrupt · ctrl+o logs"
 	case strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0:

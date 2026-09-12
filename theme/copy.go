@@ -55,6 +55,16 @@ const (
 	ReasoningMore     = " more · "
 	ReasoningExpand   = "ctrl+r expand"
 	ReasoningCollapse = "ctrl+r collapse"
+
+	// ask_user dialog copy (Phase 3 Task 11). HelpAsk is the footer help line
+	// while a question is pending; the AskHint* lines sit beneath the option
+	// list itself and, unlike HelpAsk, always mention the free-text escape
+	// hatch (typing instead of picking), since that's the one thing every ask
+	// dialog offers regardless of how it's answered.
+	HelpAsk             = "up/down move · enter pick · esc cancel"
+	AskHintSingleSelect = "up/down move · enter pick · or type your own answer"
+	AskHintMultiSelect  = "up/down move · space toggle · enter confirm · or type your own answer"
+	AskHintFreeText     = "type your answer"
 )
 
 // ReasoningMaxLines is how many trailing lines a collapsed reasoning box

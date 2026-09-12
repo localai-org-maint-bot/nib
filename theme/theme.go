@@ -41,6 +41,16 @@ var (
 	NewOutputGlyph = "↓"  // footer marker: new content arrived while scrolled up
 	HairlineGlyph  = "─"  // the one-cell rule repeated under the header
 	BoxRule        = "│"  // vertical rule down the side of a collapsed trace box
+
+	// RadioOn/RadioOff mark a single-select ask_user option; CheckOn/CheckOff
+	// mark a multi-select one. Cursor marks whichever row is highlighted,
+	// regardless of selection mode. All four are geometric shapes, which paint
+	// as blank cells on the Linux VT console — see applyGlyphProfile.
+	RadioOn  = "◉"
+	RadioOff = "○"
+	CheckOn  = "◼"
+	CheckOff = "◻"
+	Cursor   = "▸"
 )
 
 // spinnerFrames animates the working indicator. Braille cells read as a smooth
@@ -92,6 +102,9 @@ func applyGlyphProfile() {
 		NewOutputGlyph = "v"
 		HairlineGlyph = "-"
 		BoxRule = "|"
+		RadioOn, RadioOff = "(*)", "( )"
+		CheckOn, CheckOff = "[x]", "[ ]"
+		Cursor = ">"
 		return
 	}
 	PromptGlyph, ApprovalGutter, SubAgent = "›", "▏", "↳"
@@ -102,6 +115,9 @@ func applyGlyphProfile() {
 	NewOutputGlyph = "↓"
 	HairlineGlyph = "─"
 	BoxRule = "│"
+	RadioOn, RadioOff = "◉", "○"
+	CheckOn, CheckOff = "◼", "◻"
+	Cursor = "▸"
 }
 
 // Styles. Bold is reserved for the brand mark and the active approval keys.

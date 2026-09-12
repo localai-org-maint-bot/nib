@@ -1,39 +1,48 @@
 package tui
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/theme"
+	"github.com/mudler/nib/tui/render"
 )
 
-// renderAsk renders the agent's question (and numbered options, if any). The
-// glyph hints the selection mode: ( ) radio for single-select, [ ] checkbox for
-// multi-select. The block is set off by a left gutter rule rather than a box,
-// matching the tool-approval idiom.
-func renderAsk(req chat.AskRequest, width int) string {
-	gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
-	var b strings.Builder
-	b.WriteString(gutter + theme.LabelNib.Render(req.Question))
-	b.WriteString("\n")
-	marker := "( )"
-	if req.MultiSelect {
-		marker = "[ ]"
+// buildAskDialog turns a pending ask_user question into a render.Dialog: the
+// question as Title, one DialogOption per visible choice, and the live
+// selection state from list — Selected (single-select) or Checked
+// (multi-select) — so a Presenter can mark which row is highlighted or
+// ticked. This replaces the old renderAsk, which built a numbered/checkbox
+// block as plain text answered by typing an index through the normal
+// composer (parseAskAnswer, unchanged below) — the "weird UX" this task
+// exists to fix: ask_user now uses the same key-driven-modal idiom as tool
+// approval instead of looking like plain text.
+//
+// list is nil, or has no Items, for a free-text-only question (no Options on
+// the underlying chat.AskRequest) — the Dialog then carries Title alone, same
+// degrade every Presenter already gives an empty-Options Dialog. list.Window()
+// decides which Options make it into the Dialog: Dialog itself carries no
+// MaxVisible, so the windowing has to happen here, at the one call site that
+// holds both the full item list and the visible-rows budget.
+func buildAskDialog(req chat.AskRequest, list *render.SelectList) render.Dialog {
+	d := render.Dialog{Kind: render.DialogAsk, Title: req.Question}
+	if list == nil || len(list.Items) == 0 {
+		d.Hint = theme.AskHintFreeText
+		return d
 	}
-	for i, o := range req.Options {
-		fmt.Fprintf(&b, "%s%s %s %s\n", gutter, theme.Prompt.Render(marker), theme.ApproveKey.Render(fmt.Sprintf("%d.", i+1)), theme.Help.Render(o))
+	start, end := list.Window()
+	for i := start; i < end; i++ {
+		d.Options = append(d.Options, render.DialogOption{Text: list.Items[i]})
 	}
-	switch {
-	case len(req.Options) > 0 && req.MultiSelect:
-		b.WriteString(gutter + theme.Hint.Render("type numbers separated by commas (e.g. 1,3), or type your own answer."))
-	case len(req.Options) > 0:
-		b.WriteString(gutter + theme.Hint.Render("type a number to pick, or type your own answer."))
-	default:
-		b.WriteString(gutter + theme.Hint.Render("type your answer."))
+	d.Selected = list.Selected - start
+	if list.MultiSelect {
+		d.Checked = append([]bool(nil), list.Checked[start:end]...)
+		d.Hint = theme.AskHintMultiSelect
+	} else {
+		d.Hint = theme.AskHintSingleSelect
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return d
 }
 
 // parseAskAnswer maps a typed answer onto req.Options. For single-select a lone

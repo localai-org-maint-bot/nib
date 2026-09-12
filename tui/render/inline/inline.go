@@ -217,17 +217,57 @@ func optionStyle(o render.DialogOption) lipgloss.Style {
 	return theme.Help
 }
 
-// Dialog renders a modal prompt. DialogAsk arrives with its whole block
-// already composed in Title (the ask/multi-select block is domain logic that
-// stays in tui, same precedent as markdown for Message) — Dialog here just
-// places it. DialogApproval lays out Rows (the argument card, or — when
-// RowsUnstructured — a single wrapped prose block), Hint (the captured
-// reasoning, wrapped) and Options (the choice menu, one line per option styled
-// per its Emphasis).
+// dialogAskMarker picks the leading marker for one ask_user option row: a
+// checkbox when the dialog is multi-select (d.Checked non-nil), a radio
+// otherwise, filled when checked/selected and hollow when not. i indexes
+// d.Options; safe even if d.Checked is shorter (defensive, since a Presenter
+// never constructs these values itself).
+func dialogAskMarker(d render.Dialog, i int) string {
+	if d.Checked != nil {
+		if i < len(d.Checked) && d.Checked[i] {
+			return theme.CheckOn
+		}
+		return theme.CheckOff
+	}
+	if i == d.Selected {
+		return theme.RadioOn
+	}
+	return theme.RadioOff
+}
+
+// Dialog renders a modal prompt. DialogAsk lays out the question (Title),
+// then one row per option — a cursor mark on the highlighted row, a radio or
+// checkbox per dialogAskMarker, the row text in theme.ApproveKey when
+// highlighted and theme.Help otherwise (mirroring DialogApproval's Emphasis
+// styling) — and Hint beneath, wrapped. An ask with no options (free-text
+// only) degrades to placing Title alone, same as before this task. DialogApproval
+// lays out Rows (the argument card, or — when RowsUnstructured — a single
+// wrapped prose block), Hint (the captured reasoning, wrapped) and Options
+// (the choice menu, one line per option styled per its Emphasis).
 func (presenter) Dialog(d render.Dialog, w int) string {
 	switch d.Kind {
 	case render.DialogAsk:
-		return d.Title + "\n"
+		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
+		var b strings.Builder
+		b.WriteString(gutter + theme.LabelNib.Render(d.Title))
+		b.WriteString("\n")
+		for i, opt := range d.Options {
+			cursor := "  "
+			style := theme.Help
+			if i == d.Selected {
+				cursor = theme.Cursor + " "
+				style = theme.ApproveKey
+			}
+			b.WriteString(gutter + cursor + dialogAskMarker(d, i) + " " + style.Render(opt.Text))
+			b.WriteString("\n")
+		}
+		if d.Hint != "" {
+			wrapped := render.Wrap(d.Hint, w-4)
+			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
+				b.WriteString(gutter + theme.Hint.Render(line) + "\n")
+			}
+		}
+		return b.String()
 
 	case render.DialogApproval:
 		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "

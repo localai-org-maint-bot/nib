@@ -69,11 +69,20 @@ type DialogOption struct {
 
 // Dialog is a modal prompt (tool approval, ask, resume) awaiting user input.
 //
-// DialogAsk carries its entire pre-rendered block in Title (the ask/multi-
-// select question-and-options block is domain logic — parsing chat.AskRequest
-// and formatting numbered/checkbox options — that stays in tui, same
-// precedent as markdown content for Message); a Presenter for that kind just
-// places Title verbatim.
+// DialogAsk (Phase 3 Task 11) carries the question in Title and one
+// DialogOption per choice in Options — Emphasis is unused for this kind, left
+// false — with Selected the highlighted row (single-select) and Checked the
+// per-row checked state (multi-select; nil for single-select, same
+// convention DialogApproval never used until now). Hint is the line a
+// Presenter renders beneath the rows: the free-text escape-hatch reminder
+// (typing instead of picking always works — see tui/ask.go's buildAskDialog
+// and tui/model.go's KeyEnter handling). Options is already windowed to what
+// should be visible (render.SelectList.Window(), applied by the builder,
+// since Dialog itself carries no MaxVisible) — a Presenter renders every row
+// it's given. An ask with no options at all (free-text-only) arrives with
+// Options empty; a Presenter falls back to placing Title alone, the same
+// degrade DialogResume (not yet implemented) or any other Title-only kind
+// gets for free.
 //
 // DialogApproval uses the rest of the fields:
 //   - Rows holds the argument card: one [key, value] pair per structured
