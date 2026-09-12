@@ -38,15 +38,14 @@ type ChatMessage struct {
 	AgentID   string // issuing sub-agent, for Role == "tool" (empty = root agent)
 }
 
-// appendMessage appends one or more entries to the transcript and bumps
-// msgRev. This is the single choke-point every mutation of m.messages in this
-// package must go through — never assign to m.messages directly — so
-// msgViewCache's invalidation key (see messageProjCache) stays correct no
-// matter how a future change mutates the transcript, rather than relying on
-// every call site happening to be an append.
+// appendMessage appends one or more entries to the transcript. It is a plain
+// convenience wrapper over append — it claims no invariant. (It used to be the
+// choke-point a now-deleted []render.Message cache keyed its invalidation on;
+// that cache fed ViewState.Messages, which no Presenter ever read. Nothing
+// stops a caller assigning m.messages directly, and applyResume does exactly
+// that when it rebuilds a restored transcript from scratch.)
 func (m *Model) appendMessage(msgs ...ChatMessage) {
 	m.messages = append(m.messages, msgs...)
-	m.msgRev++
 }
 
 // Model represents the TUI state
@@ -62,21 +61,6 @@ type Model struct {
 	// that builds a Model directly must go through newTestModel so this is
 	// never nil when updateViewport or View run.
 	presenter render.Presenter
-	// msgViewCache caches the []render.Message projection of messages built for
-	// ViewState.Messages, so View (called on every spinner tick) doesn't
-	// re-copy the whole transcript when it hasn't changed. See
-	// messageProjCache / projectedMessages. nil on a bare Model{} literal.
-	msgViewCache *messageProjCache
-	// msgRev counts mutations of messages. Bumped only by appendMessage, the
-	// single choke-point every append call site in this package goes through
-	// (never assign to messages directly) — see appendMessage's doc comment.
-	// projectedMessages keys its cache on this, not len(messages): a length
-	// key is correct only as long as every mutation happens to be an append,
-	// a property nothing enforces once someone edits a message's Content in
-	// place (a streaming reply rewriting the last message, say) or adds a
-	// width-dependent step to the projection.
-	msgRev int
-
 	// Chat state
 	messages     []ChatMessage
 	session      *chat.Session
@@ -376,7 +360,6 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		spinner:            s,
 		presenter:          p,
 		reasoningCollapsed: true,
-		msgViewCache:       &messageProjCache{rev: -1},
 		footerCache:        &footerCache{},
 		messages:           []ChatMessage{},
 		ctx:                ctx,
@@ -1992,30 +1975,6 @@ func toolLabel(name, arguments string) string {
 	return summary
 }
 
-// roleOf maps a ChatMessage's string Role to a render.Role. agent_tool and
-// agent_result — the sub-agent thread-run lines, always rendered directly by
-// renderAgentThreadRun rather than through Presenter.Message — have no
-// dedicated render.Role of their own; they map to RoleAgent as the closest
-// fit for the ViewState.Messages projection (see viewState). Only that
-// projection reads this mapping for those two roles; the actual rendering
-// loop in updateViewport branches on the raw string before this is ever
-// consulted.
-func roleOf(s string) render.Role {
-	switch s {
-	case "user":
-		return render.RoleUser
-	case "assistant":
-		return render.RoleAssistant
-	case "agent", "agent_tool", "agent_result":
-		return render.RoleAgent
-	case "tool":
-		return render.RoleTool
-	case "error":
-		return render.RoleError
-	}
-	return render.RoleNone
-}
-
 // currentDialogs returns the render.Dialog for every prompt currently
 // pending, in the same order the original hand-rolled code rendered them
 // (approval block, then ask block). Both a background sub-agent's gated tool
@@ -2062,64 +2021,6 @@ func (m Model) currentDialogs() []render.Dialog {
 		dialogs = append(dialogs, buildResumeDialog(m.resumeList))
 	}
 	return dialogs
-}
-
-// messageProjCache caches the last render.Message projection of m.messages,
-// keyed by transcript length. It lives behind a pointer so even a
-// value-receiver Model method (View, viewState, projectedMessages) can update
-// it in place: bubbletea's Update/View both take Model by value, but every
-// copy shares the same pointee, so the cache persists across frames without
-// needing a pointer-receiver Model. nil on a bare Model{} literal, as many
-// tests construct — projectedMessages falls back to an uncached build then.
-// rev must start at -1, not 0: msgRev also starts at 0, so a zero-valued
-// cache reads as a HIT holding a nil projection before anything has ever been
-// projected. That was only harmless while the transcript happened to be empty
-// at that moment, which nothing guarantees.
-type messageProjCache struct {
-	rev  int
-	msgs []render.Message
-}
-
-// projectedMessages returns the []render.Message projection of m.messages,
-// used only for ViewState.Messages completeness (see viewState) — nothing in
-// this package's own rendering path reads it; updateViewport drives its loop
-// from m.messages directly. Without caching this re-copied and re-mapped the
-// whole transcript on every View() call, which happens on every spinner tick
-// (~10Hz) whether or not the transcript changed since the last frame.
-//
-// The cache is keyed on m.msgRev, not len(m.messages): a length key is only
-// correct as long as every mutation happens to be an append, which nothing
-// enforces (an in-place edit of an existing message's Content — a streaming
-// reply rewriting the last message, say — would leave the length unchanged
-// and silently serve stale output). msgRev is bumped only by appendMessage,
-// the single choke-point every append in this package goes through, so the
-// invariant is structural rather than a comment claiming a property of every
-// call site. If this projection ever grows a width-dependent step (glamour,
-// wrapping), contentWidth must join the cache key alongside msgRev.
-//
-// The returned slice may alias the cache's backing array directly (a cache
-// hit is not copied) rather than paying a defensive copy on every frame —
-// safe today only because nothing reads ViewState.Messages yet (see
-// viewState); the moment a consumer holds onto or mutates it, this must
-// switch to returning a copy.
-func (m Model) projectedMessages() []render.Message {
-	if m.msgViewCache != nil && m.msgViewCache.rev == m.msgRev {
-		return m.msgViewCache.msgs
-	}
-	out := make([]render.Message, 0, len(m.messages))
-	for _, msg := range m.messages {
-		out = append(out, render.Message{
-			Role:    roleOf(msg.Role),
-			Content: msg.Content,
-			Label:   toolLabel(msg.Name, msg.Arguments),
-			AgentID: msg.AgentID,
-		})
-	}
-	if m.msgViewCache != nil {
-		m.msgViewCache.rev = m.msgRev
-		m.msgViewCache.msgs = out
-	}
-	return out
 }
 
 // showingViewport reports whether the body area is the conversation viewport,
@@ -2206,14 +2107,12 @@ func (m Model) viewState() render.ViewState {
 
 	return render.ViewState{
 		Width:       m.width,
-		Height:      m.height,
 		Cwd:         shortenPath(currentDir()),
 		Brand:       theme.BrandName,
 		AutoApprove: m.session != nil && m.session.AutoApprove(),
 		Loading:     m.loading,
 		Status:      status,
 		Spinner:     m.spinner.View(),
-		Messages:    m.projectedMessages(),
 		Reasoning: render.Reasoning{
 			Text:      m.reasoning,
 			Collapsed: m.reasoningCollapsed,

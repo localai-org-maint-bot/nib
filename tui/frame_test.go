@@ -47,9 +47,6 @@ func TestViewStateIsComplete(t *testing.T) {
 	if len(vs.Footers) != 1 || vs.Footers[0].Kind != render.FooterJobs {
 		t.Errorf("viewState Footers = %+v, want one FooterJobs row", vs.Footers)
 	}
-	if len(vs.Messages) != 1 {
-		t.Errorf("viewState Messages = %d entries, want 1", len(vs.Messages))
-	}
 	if vs.Brand == "" || vs.Status == "" {
 		t.Errorf("viewState left Brand/Status empty: %q / %q", vs.Brand, vs.Status)
 	}
@@ -271,39 +268,6 @@ func TestToolLabelFormattedModelSide(t *testing.T) {
 	m.updateViewport()
 	if out := m.viewport.View(); !strings.Contains(out, want) {
 		t.Errorf("rendered tool block lost the formatted label %q: %q", want, out)
-	}
-
-	// And the projection carries it too, so a full-frame presenter reading
-	// ViewState.Messages sees the same label.
-	vs := m.viewState()
-	if len(vs.Messages) != 1 || vs.Messages[0].Label != want {
-		t.Errorf("ViewState.Messages label = %+v, want Label %q", vs.Messages, want)
-	}
-}
-
-// TestProjectedMessagesFirstCallIsNotACacheHit pins the zero-value collision: a
-// cache starting at rev 0 matched msgRev's own starting 0, so the very first
-// projection was a HIT returning nil.
-func TestProjectedMessagesFirstCallIsNotACacheHit(t *testing.T) {
-	m := newTestModel(Model{})
-	m.messages = []ChatMessage{{Role: "user", Content: "seeded outside appendMessage"}}
-
-	if got := m.projectedMessages(); len(got) != 1 {
-		t.Errorf("projectedMessages() = %d entries, want 1 — the empty cache read as a hit", len(got))
-	}
-}
-
-// TestProjectedMessagesCacheFollowsAppends: the cache still has to serve
-// repeated frames from one build, and still has to notice an append.
-func TestProjectedMessagesCacheFollowsAppends(t *testing.T) {
-	m := newTestModel(Model{})
-	m = withMessages(m, ChatMessage{Role: "user", Content: "one"})
-	if got := len(m.projectedMessages()); got != 1 {
-		t.Fatalf("projectedMessages() = %d entries, want 1", got)
-	}
-	m = withMessages(m, ChatMessage{Role: "user", Content: "two"})
-	if got := len(m.projectedMessages()); got != 2 {
-		t.Errorf("projectedMessages() = %d entries after an append, want 2", got)
 	}
 }
 

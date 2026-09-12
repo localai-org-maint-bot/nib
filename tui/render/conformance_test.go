@@ -863,7 +863,7 @@ func TestContentWidthMatchesRenderedPrefix(t *testing.T) {
 func TestFrameContainsEveryPiece(t *testing.T) {
 	const w, h = 60, 40
 	v := render.ViewState{
-		Width: w, Height: h,
+		Width: w,
 		Brand: "nib", Cwd: "~/src/project",
 		Help: "tab complete", Badges: "12k ctx", Err: "something failed",
 		Footers: []render.FooterRow{{Glyph: "*", Text: "1 job running", Kind: render.FooterJobs}},
@@ -900,7 +900,7 @@ func TestFrameContainsEveryPiece(t *testing.T) {
 // this suite uses.
 func TestFrameStructuralEquivalence(t *testing.T) {
 	const w, h = 60, 40
-	v := render.ViewState{Width: w, Height: h, Brand: "nib", Cwd: "~/src/project", Help: "tab complete"}
+	v := render.ViewState{Width: w, Brand: "nib", Cwd: "~/src/project", Help: "tab complete"}
 	body := "BODY-MARKER"
 	composer := "COMPOSER-MARKER"
 	tokens := []string{"nib", "~/src/project", "BODY-MARKER", "COMPOSER-MARKER", "tab complete"}
@@ -1047,7 +1047,7 @@ func TestAllPresentersRenderMultiSelectChecks(t *testing.T) {
 func TestFrameOverlaysDialogsOnlyWhereDeclared(t *testing.T) {
 	const w, h = 60, 40
 	v := render.ViewState{
-		Width: w, Height: h, Brand: "nib", Cwd: "~/src/project",
+		Width: w, Brand: "nib", Cwd: "~/src/project",
 		Dialogs: []render.Dialog{{
 			Kind:    render.DialogAsk,
 			Title:   "OVERLAY-MARKER-QUESTION",

@@ -158,10 +158,17 @@ type FooterRow struct {
 // from. It carries no behaviour — presenters read it and produce strings.
 //
 // The model builds one ViewState per frame (see tui/model.go's viewState
-// method) with every field populated — Messages/Reasoning/Dialogs included,
-// even though the inline Presenter's Header/Footer never read them — so nothing
-// here is silently nil for a Presenter that composes a whole alt-screen frame
-// from one ViewState rather than being driven block-by-block.
+// method) with every field populated — Reasoning/Dialogs included, even though
+// the inline Presenter's Header/Footer never read them — so nothing here is
+// silently nil for a Presenter that composes a whole alt-screen frame from one
+// ViewState rather than being driven block-by-block.
+//
+// It carries no transcript projection: a []Message field lived here for two
+// phases with a producer and no consumer (updateViewport builds its own
+// render.Message values inline, from the raw transcript, because it also has
+// to route sub-agent thread runs and pre-render markdown), and the two
+// projections had already drifted apart. Height went the same way — Frame
+// receives the frame's height as an argument.
 //
 // Dialogs is a slice, not a single *Dialog, because more than one prompt can
 // be pending at once: a background sub-agent's gated tool approval and a
@@ -186,14 +193,12 @@ type FooterRow struct {
 //     Kind) and joins whichever are present, in order.
 type ViewState struct {
 	Width       int
-	Height      int
 	Cwd         string
 	Brand       string
 	AutoApprove bool
 	Loading     bool
 	Status      string
 	Spinner     string
-	Messages    []Message
 	Reasoning   Reasoning
 	Dialogs     []Dialog
 	Help        string
