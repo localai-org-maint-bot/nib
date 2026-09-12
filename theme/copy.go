@@ -48,7 +48,18 @@ const (
 
 	// StatusRunning is shown between an approved tool call and its result.
 	StatusRunning = "running…"
+
+	// Reasoning box copy. A collapsed box shows the trailing
+	// ReasoningMaxLines lines of the live trace; the TUI composes the hint
+	// line as "… " + n + ReasoningMore + ReasoningExpand.
+	ReasoningMore     = " more · "
+	ReasoningExpand   = "ctrl+r expand"
+	ReasoningCollapse = "ctrl+r collapse"
 )
+
+// ReasoningMaxLines is how many trailing lines a collapsed reasoning box
+// shows.
+const ReasoningMaxLines = 5
 
 // CLIApprovePrompt builds the line-based CLI approval prompt (the TUI uses
 // the numbered single-key menu instead). alwaysScope describes what `a`

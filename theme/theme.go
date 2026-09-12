@@ -40,6 +40,7 @@ var (
 	ReasoningGlyph = "✻"  // marks a block of model thinking/reasoning
 	NewOutputGlyph = "↓"  // footer marker: new content arrived while scrolled up
 	HairlineGlyph  = "─"  // the one-cell rule repeated under the header
+	BoxRule        = "│"  // vertical rule down the side of a collapsed trace box
 )
 
 // spinnerFrames animates the working indicator. Braille cells read as a smooth
@@ -90,6 +91,7 @@ func applyGlyphProfile() {
 		ReasoningGlyph = "*"
 		NewOutputGlyph = "v"
 		HairlineGlyph = "-"
+		BoxRule = "|"
 		return
 	}
 	PromptGlyph, ApprovalGutter, SubAgent = "›", "▏", "↳"
@@ -99,6 +101,7 @@ func applyGlyphProfile() {
 	ReasoningGlyph = "✻"
 	NewOutputGlyph = "↓"
 	HairlineGlyph = "─"
+	BoxRule = "│"
 }
 
 // Styles. Bold is reserved for the brand mark and the active approval keys.

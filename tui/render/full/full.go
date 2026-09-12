@@ -8,6 +8,7 @@
 package full
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -166,7 +167,15 @@ func (presenter) Message(m render.Message, prev render.Role, w int) string {
 
 // Reasoning renders the working indicator (spinner + status verb) and, when
 // loading, the collapsible reasoning trace beneath it. Renders nothing when
-// !v.Loading.
+// !v.Loading. The trace itself is capped through render.CollapsibleBox, which
+// this task adds a producer for: v.Reasoning.Collapsed/MaxLines, populated by
+// the model in viewState() from Model.reasoningCollapsed and
+// theme.ReasoningMaxLines. Collapsed, the box shows the TRAILING lines of the
+// trace (never the leading ones) — see CollapsibleBox's doc for why: a
+// head-anchored box freezes on the trace's opening words and reads as a hang,
+// while tailing doubles the box as its own progress indicator. This mirrors
+// inline byte-for-byte, same precedent as the rest of this file — the
+// conformance suite enforces it.
 func (presenter) Reasoning(v render.ViewState, w int) string {
 	if !v.Loading {
 		return ""
@@ -174,11 +183,30 @@ func (presenter) Reasoning(v render.ViewState, w int) string {
 	var b strings.Builder
 	b.WriteString(render.Loader(v.Spinner, v.Status, "", w))
 	b.WriteString("\n")
-	if v.Reasoning.Text != "" {
+	if strings.TrimSpace(v.Reasoning.Text) != "" {
+		r := v.Reasoning
+		box := render.CollapsibleBox{
+			Lines:     strings.Split(strings.TrimRight(render.Wrap(r.Text, w-4), "\n"), "\n"),
+			MaxLines:  r.MaxLines,
+			Collapsed: r.Collapsed,
+		}
 		b.WriteString(theme.ReasoningHeader() + "\n")
-		wrapped := render.Wrap(v.Reasoning.Text, w-4)
-		for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
-			b.WriteString("  " + theme.Reasoning.Render(line) + "\n")
+		for _, line := range box.Visible() {
+			b.WriteString("  " + theme.Subtle.Render(theme.BoxRule) + " " + theme.Reasoning.Render(line) + "\n")
+		}
+		// Default: expanded with nothing hidden — offer to collapse it back.
+		// Collapsed with something hidden — offer to expand and say how much
+		// is behind the fold. Collapsed with nothing hidden (a short trace
+		// that never grew past MaxLines) — no hint at all: there is nothing
+		// either affordance would change.
+		hint := theme.ReasoningCollapse
+		if n := box.Hidden(); n > 0 {
+			hint = "… " + strconv.Itoa(n) + theme.ReasoningMore + theme.ReasoningExpand
+		} else if r.Collapsed {
+			hint = ""
+		}
+		if hint != "" {
+			b.WriteString("  " + theme.Hint.Render(hint) + "\n")
 		}
 	}
 	return b.String()

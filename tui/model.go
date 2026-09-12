@@ -148,9 +148,14 @@ type Model struct {
 	loopsPath string // .nib/loops.json for durable jobs
 	status    string
 	reasoning string
-	err       error
-	output    string // Command to output to shell on exit
-	quitting  bool
+	// reasoningCollapsed caps the live thinking trace to a few trailing lines
+	// so it does not flood the transcript. Per-session, persists across
+	// turns: it is a Model field (not derived per-frame), toggled only by
+	// ctrl+r.
+	reasoningCollapsed bool
+	err                error
+	output             string // Command to output to shell on exit
+	quitting           bool
 
 	// Tool approval state
 	pendingTool      *chat.ToolCallRequest
@@ -315,36 +320,37 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 	}
 
 	m := Model{
-		viewport:         vp,
-		logVP:            viewport.New(80, 10),
-		textarea:         ta,
-		spinner:          s,
-		presenter:        p,
-		msgViewCache:     &messageProjCache{rev: -1},
-		footerCache:      &footerCache{},
-		messages:         []ChatMessage{},
-		ctx:              ctx,
-		cancel:           cancel,
-		maxHeight:        maxH,
-		transports:       transports,
-		shellJobs:        shellJobs,
-		cfg:              cfg,
-		height:           height,
-		agentEventChan:   make(chan chat.AgentEvent, 16),
-		statusChan:       make(chan string, 10),
-		reasoningChan:    make(chan string, 10),
-		toolRequestChan:  make(chan chat.ToolCallRequest),
-		toolResponseChan: make(chan chat.ToolCallResponse),
-		toolResultChan:   make(chan chat.ToolResult, 64),
-		askRequestChan:   make(chan chat.AskRequest),
-		askResponseChan:  make(chan string),
-		wakeupChan:       make(chan chat.WakeupRequest, 8),
-		parkChan:         make(chan parkEvent, 16),
-		compactChan:      make(chan [2]int, 4),
-		pruneChan:        make(chan [2]int, 4),
-		mdRenderers:      make(map[int]*glamour.TermRenderer),
-		loops:            loop.NewRegistry(),
-		loopsPath:        filepath.Join(".nib", "loops.json"),
+		viewport:           vp,
+		logVP:              viewport.New(80, 10),
+		textarea:           ta,
+		spinner:            s,
+		presenter:          p,
+		reasoningCollapsed: true,
+		msgViewCache:       &messageProjCache{rev: -1},
+		footerCache:        &footerCache{},
+		messages:           []ChatMessage{},
+		ctx:                ctx,
+		cancel:             cancel,
+		maxHeight:          maxH,
+		transports:         transports,
+		shellJobs:          shellJobs,
+		cfg:                cfg,
+		height:             height,
+		agentEventChan:     make(chan chat.AgentEvent, 16),
+		statusChan:         make(chan string, 10),
+		reasoningChan:      make(chan string, 10),
+		toolRequestChan:    make(chan chat.ToolCallRequest),
+		toolResponseChan:   make(chan chat.ToolCallResponse),
+		toolResultChan:     make(chan chat.ToolResult, 64),
+		askRequestChan:     make(chan chat.AskRequest),
+		askResponseChan:    make(chan string),
+		wakeupChan:         make(chan chat.WakeupRequest, 8),
+		parkChan:           make(chan parkEvent, 16),
+		compactChan:        make(chan [2]int, 4),
+		pruneChan:          make(chan [2]int, 4),
+		mdRenderers:        make(map[int]*glamour.TermRenderer),
+		loops:              loop.NewRegistry(),
+		loopsPath:          filepath.Join(".nib", "loops.json"),
 	}
 	m.completion.setRegistries(cfg.Commands, cfg.Skills, cfg.Agents)
 	return m
@@ -668,6 +674,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logSel = 0
 			m.logOpenID = ""
 			m.logOpenKind = ""
+			return m, nil
+
+		case tea.KeyCtrlR:
+			// Toggle the live reasoning trace between its tailing collapsed
+			// box and its full expanded form. Per-session state, so it
+			// persists across turns until the user toggles it again.
+			m.reasoningCollapsed = !m.reasoningCollapsed
+			m.updateViewport()
 			return m, nil
 
 		case tea.KeyTab:
@@ -1944,10 +1958,14 @@ func (m Model) viewState() render.ViewState {
 		Status:      status,
 		Spinner:     m.spinner.View(),
 		Messages:    m.projectedMessages(),
-		Reasoning:   render.Reasoning{Text: m.reasoning},
-		Dialogs:     m.currentDialogs(),
-		Help:        help,
-		Badges:      m.footerBadges(lipgloss.Width(help)),
+		Reasoning: render.Reasoning{
+			Text:      m.reasoning,
+			Collapsed: m.reasoningCollapsed,
+			MaxLines:  theme.ReasoningMaxLines,
+		},
+		Dialogs: m.currentDialogs(),
+		Help:    help,
+		Badges:  m.footerBadges(lipgloss.Width(help)),
 
 		// New content arrived below the fold while the user was scrolled up.
 		NewOutput: m.showingViewport() && !m.viewport.AtBottom(),
