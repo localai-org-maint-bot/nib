@@ -92,12 +92,45 @@ func contentPrefix(role render.Role) string {
 // leave, instead of hard-coding one surface's prefix for both. The result is
 // clamped to at least 1: a terminal narrower than the chrome must still give
 // a renderer a legal width rather than zero or a negative one.
+//
+// This deliberately stays role-only (no prev parameter), even though
+// messagePrefix below varies the prefix Message actually writes by prev: on a
+// consecutive same-role run, messagePrefix swaps the label for an all-spaces
+// prefix of the EXACT SAME width (see its doc), never a narrower or wider
+// one. So the width contentPrefix reports is correct for every prev — the
+// model never has to know which case it is, and pre-rendered markdown never
+// needs re-wrapping when a message turns out to start a run instead of
+// continuing one.
 func (presenter) ContentWidth(role render.Role, w int) int {
 	cw := w - lipgloss.Width(contentPrefix(role))
 	if cw < 1 {
 		cw = 1
 	}
 	return cw
+}
+
+// messagePrefix returns the prefix Message writes for role, given the
+// previously rendered role. Repeating "you ·"/"nib ·" down a run of
+// consecutive same-role messages costs six columns on every line and tells
+// the reader nothing the blank-line separator didn't already say, so a
+// consecutive user/assistant message gets an all-spaces prefix instead of the
+// label — but at the SAME width as the label, never narrower. That is what
+// keeps this in agreement with ContentWidth (which cannot see prev at all,
+// see its doc) and keeps a run's content aligned down every line, not just
+// its own: shrinking the prefix would shift content left the moment a run
+// starts, and a Message call for a later line in the run never revisits an
+// earlier one to re-align it.
+//
+// Only RoleUser/RoleAssistant branch on prev, matching the brief exactly:
+// RoleAgent/RoleTool/RoleError keep their own unconditional chrome (the
+// sub-agent marker, the tool body indent, the error cross) unchanged by this
+// task.
+func messagePrefix(role, prev render.Role) string {
+	label := contentPrefix(role)
+	if prev == role && (role == render.RoleUser || role == render.RoleAssistant) {
+		return strings.Repeat(" ", lipgloss.Width(label))
+	}
+	return label
 }
 
 // Message renders one chat entry, including the trailing blank-line separator
@@ -115,22 +148,21 @@ func (presenter) ContentWidth(role render.Role, w int) int {
 // computes HugNext and carries it on the value rather than Message re-deriving
 // it from prev/Role.
 //
-// prev is accepted (not just for signature symmetry with the Presenter
-// interface) so a different Presenter can vary spacing across role
-// transitions; this implementation's spacing rule never depended on the
-// previous role — it was always "blank after every message, except a hugging
-// agent line" — so branching on prev here would be new behaviour, which a
-// pure extraction must not introduce.
+// prev is Phase 3 Task 12's first real consumer: on a run of consecutive
+// same-role user/assistant messages, the label is dropped in favour of the
+// blank-line separator (see messagePrefix) — the trailing-separator rule
+// itself still never depends on prev; it was always "blank after every
+// message, except a hugging agent line", and stays that way here.
 func (presenter) Message(m render.Message, prev render.Role, w int) string {
 	var body string
 	switch m.Role {
 	case render.RoleUser:
-		prefix := contentPrefix(render.RoleUser)
+		prefix := messagePrefix(render.RoleUser, prev)
 		wrapped := render.Wrap(m.Content, w-lipgloss.Width(prefix))
 		body = prefixed(prefix, wrapped)
 
 	case render.RoleAssistant:
-		body = prefixed(contentPrefix(render.RoleAssistant), m.Content)
+		body = prefixed(messagePrefix(render.RoleAssistant, prev), m.Content)
 
 	case render.RoleAgent:
 		body = prefixed(contentPrefix(render.RoleAgent), styledLines(theme.Subtle, m.Content))

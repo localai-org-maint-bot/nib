@@ -1,12 +1,23 @@
 package inline
 
 import (
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/tui/render"
 )
+
+var ansiEscape = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// stripANSI removes SGR escape sequences so column measurements count only
+// visible runes.
+func stripANSI(s string) string {
+	return ansiEscape.ReplaceAllString(s, "")
+}
 
 func TestMessageRendersRolePrefixes(t *testing.T) {
 	p := New()
@@ -42,6 +53,57 @@ func TestContinuationLinesAreIndentedToPrefixWidth(t *testing.T) {
 	}
 	if !strings.HasPrefix(lines[1], "      ") {
 		t.Errorf("continuation line not indented to the prefix width: %q", lines[1])
+	}
+}
+
+// TestInlineOmitsPrefixOnConsecutiveSameRole: repeating "you ·" down a run of
+// messages costs six columns on every line and tells the reader nothing new.
+func TestInlineOmitsPrefixOnConsecutiveSameRole(t *testing.T) {
+	p := New()
+	msg := render.Message{Role: render.RoleUser, Content: "second message"}
+
+	first := p.Message(msg, render.RoleNone, 80)
+	second := p.Message(msg, render.RoleUser, 80)
+
+	if !strings.Contains(first, "you") {
+		t.Error("the first message of a run must carry its label")
+	}
+	if strings.Contains(second, "you") {
+		t.Error("a consecutive same-role message must not repeat the label")
+	}
+	if !strings.Contains(second, "second message") {
+		t.Error("content lost when the prefix was omitted")
+	}
+}
+
+// TestInlineConsecutiveRunStaysAligned pins the width half of the same rule:
+// dropping the label must not shift the content left. Both renders share one
+// ContentWidth (which cannot see prev — see the type's doc), so the spaces
+// standing in for the label on a consecutive message must be the exact same
+// width as the label itself, or a run's content would drift out of column
+// the moment it stopped being the first message.
+func TestInlineConsecutiveRunStaysAligned(t *testing.T) {
+	p := New()
+	msg := render.Message{Role: render.RoleAssistant, Content: "aligned"}
+
+	labeled := p.Message(msg, render.RoleNone, 80)
+	continued := p.Message(msg, render.RoleAssistant, 80)
+
+	// The column is the RENDERED width up to the token, not a byte offset:
+	// the separator (·) is multi-byte, so strings.Index would overstate the
+	// column by counting its extra byte.
+	col := func(out string) int {
+		idx := strings.Index(stripANSI(out), "aligned")
+		if idx < 0 {
+			return -1
+		}
+		return lipgloss.Width(stripANSI(out)[:idx])
+	}
+	if labeled == "" || continued == "" {
+		t.Fatalf("expected non-empty output, got %q and %q", labeled, continued)
+	}
+	if got, want := col(continued), col(labeled); got != want {
+		t.Errorf("consecutive message content starts at column %d, want %d (same as the labeled run start): %q vs %q", got, want, continued, labeled)
 	}
 }
 
