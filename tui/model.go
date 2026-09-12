@@ -152,8 +152,21 @@ type Model struct {
 	// reasoningCollapsed caps the live thinking trace to a few trailing lines
 	// so it does not flood the transcript. Per-session, persists across
 	// turns: it is a Model field (not derived per-frame), toggled only by
-	// ctrl+r.
+	// ctrl+r — and, on a mouse-capable surface, by clicking the box itself
+	// (Phase 3 Task 16).
 	reasoningCollapsed bool
+	// reasoningSpanStart/End record the content-relative row span [start, end)
+	// the reasoning box occupies in the viewport's virtualized scrollback for
+	// THIS render — recomputed on every updateViewport pass, never cached
+	// across frames. The box's height changes between collapsed (~7 rows) and
+	// expanded (many more), so a span captured once would go stale the moment
+	// the user expands it, making the very next click land on the wrong row.
+	// Both are 0 (an empty span, start == end) whenever updateViewport did not
+	// render a box this frame (not loading, or no reasoning text yet) — a
+	// click can never match an empty span. See the tea.MouseMsg case in
+	// Update, which compares a translated click row against this span.
+	reasoningSpanStart int
+	reasoningSpanEnd   int
 	err                error
 	output             string // Command to output to shell on exit
 	quitting           bool
@@ -873,6 +886,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.dispatchInput(input)
 			m.updateViewportFollow()
 			return m, cmd
+		}
+
+	case tea.MouseMsg:
+		// Click-to-expand the reasoning box (Phase 3 Task 16). Gated on the
+		// presenter's own capability rather than assuming mouse events only
+		// arrive when reporting is on: cmd/tui.go only enables
+		// tea.WithMouseCellMotion() for a Caps().Mouse surface (full-screen),
+		// so a real terminal never sends this to the inline widget — but a
+		// test can construct the message directly, and the inline surface
+		// must ignore it all the same, by construction, not by accident.
+		//
+		// A non-hit click (or any other button/action) falls through
+		// unchanged to the m.viewport.Update(msg) fallback at the bottom of
+		// this function, which is what still gives wheel scrolling — do not
+		// return early except on an actual hit.
+		if m.presenter.Caps().Mouse && msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if m.reasoningBoxHit(msg.Y) {
+				m.reasoningCollapsed = !m.reasoningCollapsed
+				m.updateViewport()
+				return m, nil
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -2100,6 +2134,32 @@ func (m Model) showingViewport() bool {
 	return len(m.messages) > 0 || m.loading || m.awaitingApproval || m.awaitingAsk || m.awaitingResume
 }
 
+// reasoningBoxHit reports whether a terminal-relative mouse Y lands inside
+// the reasoning box's last-recorded row span (reasoningSpanStart/End, see its
+// doc comment — recomputed every updateViewport pass, so this always tests
+// against the box's CURRENT height, collapsed or expanded).
+//
+// Y is translated to a content-relative viewport row by subtracting the
+// chrome the Presenter's own Header renders above the body, then adding the
+// viewport's scroll offset. The chrome height is measured from
+// presenter.Header(vs) itself — the exact string View's Frame call
+// concatenates body directly onto (see full.Frame / inline.Frame: no
+// separating newline is added between them, so every "\n" Header emits is
+// one terminal row the body starts after) — rather than a hardcoded guess,
+// so a future header redesign can't silently desync the hit-test from what
+// the screen actually shows.
+func (m Model) reasoningBoxHit(y int) bool {
+	if m.reasoningSpanStart >= m.reasoningSpanEnd {
+		return false // nothing rendered as a box this frame
+	}
+	if !m.showingViewport() {
+		return false // body isn't the transcript viewport this frame
+	}
+	chrome := strings.Count(m.presenter.Header(m.viewState()), "\n")
+	row := y - chrome + m.viewport.YOffset
+	return row >= m.reasoningSpanStart && row < m.reasoningSpanEnd
+}
+
 // footerRows builds the job-status footer rows — active sub-agent jobs, shell
 // jobs, cron loops, the active goal — in the order they are rendered. Empty
 // while the log viewer owns the body, which hides the footer entirely.
@@ -2296,7 +2356,16 @@ func (m *Model) updateViewport() {
 	// Frame runs) and once more as that surface's own overlay. A surface that
 	// does not declare it (inline) has no other place a dialog reaches the
 	// screen, so this append is still its only path.
-	sb.WriteString(presenter.Reasoning(vs, contentWidth))
+	// Record the box's content-relative row span for this render: the
+	// newline count immediately before and after the write. Recomputed every
+	// pass (never cached across frames) — see reasoningSpanStart/End's doc
+	// comment on Model. An empty Reasoning() write (not loading, or no trace
+	// yet) leaves start == end, an empty span nothing can click.
+	reasoningStart := strings.Count(sb.String(), "\n")
+	reasoningOut := presenter.Reasoning(vs, contentWidth)
+	sb.WriteString(reasoningOut)
+	m.reasoningSpanStart = reasoningStart
+	m.reasoningSpanEnd = reasoningStart + strings.Count(reasoningOut, "\n")
 	if !presenter.Caps().OverlayDialogs {
 		for _, d := range vs.Dialogs {
 			sb.WriteString(presenter.Dialog(d, contentWidth))
