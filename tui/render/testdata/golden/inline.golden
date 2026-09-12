@@ -96,6 +96,11 @@ nib · first para
   │ line-8
   … 5 more · ctrl+r expand
 
+=== reasoning collapsed with nothing hidden ===
+| Working
+✻ reasoning
+  │ short
+
 === dialog approval five option ===
 ▏ bash wants to run
 ▏   path  main.go

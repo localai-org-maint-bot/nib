@@ -39,7 +39,9 @@ type goldenCase struct {
 //     varies by prev) and a multi-paragraph body;
 //   - ContentWidth for every role, including the sub-1-cell clamp;
 //   - Reasoning idle, with only the working indicator, with an expanded trace,
-//     and with a trace collapsed enough to hide lines;
+//     with a trace collapsed enough to hide lines, and collapsed with nothing
+//     hidden (a short trace that never grew past MaxLines, which suppresses
+//     the hint line entirely);
 //   - Dialog's every DialogKind (Approval in its five-option/edit-mode/
 //     unstructured/no-option/two-option shapes, Ask, Ask with multi-select
 //     checks, Resume, and an unhandled kind);
@@ -147,6 +149,12 @@ func goldenCases() []goldenCase {
 			return p.Reasoning(render.ViewState{
 				Loading: true, Spinner: "|", Status: "Working",
 				Reasoning: render.Reasoning{Text: collapsedTrace, Collapsed: true, MaxLines: 3},
+			}, 50)
+		}},
+		{"reasoning collapsed with nothing hidden", func(p render.Presenter) string {
+			return p.Reasoning(render.ViewState{
+				Loading: true, Spinner: "|", Status: "Working",
+				Reasoning: render.Reasoning{Text: "short", Collapsed: true, MaxLines: 20},
 			}, 50)
 		}},
 

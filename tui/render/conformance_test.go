@@ -667,6 +667,21 @@ func TestReasoningStructuralEquivalence(t *testing.T) {
 			tokens: []string{"|", "Working", "line-6", "line-7", "line-8", wantHint},
 			absent: []string{"line-1", "line-2", "line-3", "line-4", "line-5"},
 		},
+		{
+			// Base.Reasoning's r.Collapsed && box.Hidden() == 0 branch: a short
+			// trace that never grew past MaxLines has nothing collapsing would
+			// change, so neither the expand nor the collapse invitation makes
+			// sense — the hint is suppressed entirely rather than shown as one
+			// or the other. Nothing exercised this branch through either
+			// presenter before this case.
+			name: "collapsed reasoning trace with nothing hidden shows no hint",
+			state: render.ViewState{
+				Loading: true, Spinner: "|", Status: "Working",
+				Reasoning: render.Reasoning{Text: "short", Collapsed: true, MaxLines: 20},
+			},
+			tokens: []string{"|", "Working", "short"},
+			absent: []string{theme.ReasoningExpand, theme.ReasoningCollapse},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
