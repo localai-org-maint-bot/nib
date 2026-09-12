@@ -81,8 +81,8 @@ const (
 	// hatch (typing instead of picking), since that's the one thing every ask
 	// dialog offers regardless of how it's answered.
 	HelpAsk             = "up/down move · pgup/pgdn page · enter pick · esc cancel"
-	AskHintSingleSelect = "up/down move · enter pick · or type your own answer"
-	AskHintMultiSelect  = "up/down move · space toggle · enter confirm · or type your own answer"
+	AskHintSingleSelect = "up/down/pgup/pgdn move · enter pick · or type your answer"
+	AskHintMultiSelect  = "up/down/pgup/pgdn move · space toggle · enter confirm · or type your answer"
 	AskHintFreeText     = "type your answer"
 
 	// AskBlockedByApproval replaces the ask dialog's normal hint when a tool
