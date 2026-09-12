@@ -32,6 +32,18 @@ func TestExpandedShowsEverything(t *testing.T) {
 	}
 }
 
+// TestNegativeMaxLinesIsNotTruncated: a negative MaxLines is as meaningless
+// as zero and must not panic or slice out of range.
+func TestNegativeMaxLinesIsNotTruncated(t *testing.T) {
+	b := CollapsibleBox{Lines: []string{"one", "two", "three"}, MaxLines: -1, Collapsed: true}
+	if got, want := b.Visible(), []string{"one", "two", "three"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Visible() = %v, want %v", got, want)
+	}
+	if got := b.Hidden(); got != 0 {
+		t.Errorf("Hidden() = %d, want 0", got)
+	}
+}
+
 func TestShorterThanMaxIsNotTruncated(t *testing.T) {
 	b := CollapsibleBox{Lines: []string{"one"}, MaxLines: 5, Collapsed: true}
 	if got, want := b.Visible(), []string{"one"}; !reflect.DeepEqual(got, want) {

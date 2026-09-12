@@ -100,6 +100,85 @@ func TestSelectListPageMovesByMaxVisible(t *testing.T) {
 	}
 }
 
+// TestSelectListPageClampsAtEnd pins Page's clamp-not-wrap contract: a page
+// jump that overshoots the last item must land on the last item, not
+// teleport to the top the way Move's wraparound would. Against a
+// Move-delegating Page (MaxVisible 3, n 6), Selected 5, Page(1) computes
+// Move(3) => (5+3)%6 == 2, which this test must reject.
+func TestSelectListPageClampsAtEnd(t *testing.T) {
+	l := &SelectList{Items: []string{"a", "b", "c", "d", "e", "f"}, MaxVisible: 3, Selected: 5}
+	l.Page(1)
+	if l.Selected != 5 {
+		t.Errorf("Selected = %d, want 5 (clamped to the last item)", l.Selected)
+	}
+}
+
+// TestSelectListPageClampsAtStart is the mirror of the above: paging up past
+// the first item must land on 0, not wrap to the end.
+func TestSelectListPageClampsAtStart(t *testing.T) {
+	l := &SelectList{Items: []string{"a", "b", "c", "d", "e", "f"}, MaxVisible: 3, Selected: 1}
+	l.Page(-1)
+	if l.Selected != 0 {
+		t.Errorf("Selected = %d, want 0 (clamped to the first item)", l.Selected)
+	}
+}
+
+// TestSelectListPageUnlimitedJumpsToEdge: with no windowing (MaxVisible <= 0)
+// there is conceptually one page, so paging in either direction jumps to
+// that page's edge — Home/End behaviour.
+func TestSelectListPageUnlimitedJumpsToEdge(t *testing.T) {
+	l := &SelectList{Items: []string{"a", "b", "c", "d", "e"}, Selected: 1}
+	l.Page(1)
+	if l.Selected != 4 {
+		t.Errorf("Page(1) with unlimited MaxVisible: Selected = %d, want 4", l.Selected)
+	}
+	l.Selected = 3
+	l.Page(-1)
+	if l.Selected != 0 {
+		t.Errorf("Page(-1) with unlimited MaxVisible: Selected = %d, want 0", l.Selected)
+	}
+}
+
+// TestSelectListPageNegativeMaxVisibleJumpsToEdge: a negative MaxVisible is
+// as meaningless as 0 and must fall back the same way.
+func TestSelectListPageNegativeMaxVisibleJumpsToEdge(t *testing.T) {
+	l := &SelectList{Items: []string{"a", "b", "c", "d", "e"}, MaxVisible: -3, Selected: 1}
+	l.Page(1)
+	if l.Selected != 4 {
+		t.Errorf("Selected = %d, want 4", l.Selected)
+	}
+}
+
+// TestSelectListMultiSelectNilOrShortChecked confirms Toggle/Answer stay
+// panic-free when Checked is nil or shorter than Items, matching the
+// already-tested empty-list safety for the multi-select path.
+func TestSelectListMultiSelectNilOrShortChecked(t *testing.T) {
+	cases := []struct {
+		name    string
+		checked []bool
+	}{
+		{"nil Checked", nil},
+		{"Checked shorter than Items", make([]bool, 1)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			l := &SelectList{Items: []string{"a", "b", "c"}, MultiSelect: true, Checked: c.checked, Selected: 2}
+			l.Toggle()
+			if got := l.Answer(); got != "" {
+				t.Errorf("Answer() = %q, want empty", got)
+			}
+		})
+	}
+}
+
+func TestSelectListWindowNegativeMaxVisible(t *testing.T) {
+	l := &SelectList{Items: []string{"a", "b", "c"}, MaxVisible: -1}
+	start, end := l.Window()
+	if start != 0 || end != 3 {
+		t.Errorf("Window() = (%d, %d), want (0, 3)", start, end)
+	}
+}
+
 func TestSelectListMultiSelectAnswerNothingChecked(t *testing.T) {
 	l := &SelectList{Items: []string{"a", "b", "c"}, MultiSelect: true, Checked: make([]bool, 3)}
 	if got := l.Answer(); got != "" {

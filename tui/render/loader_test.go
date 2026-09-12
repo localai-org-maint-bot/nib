@@ -39,6 +39,27 @@ func TestLoaderDropsTrailerWhenTooNarrow(t *testing.T) {
 	}
 }
 
+// TestLoaderTrailerGapBoundary pins the exact threshold: a two-cell gap
+// keeps the trailer, a one-cell gap drops it. The existing narrow-width test
+// lands far into negative gap and would not catch an off-by-one (gap <= 2
+// instead of gap < 2).
+func TestLoaderTrailerGapBoundary(t *testing.T) {
+	spinner, status, trailer := "-", "hi", "ok"
+	left := Loader(spinner, status, "", 100)
+	leftWidth := lipgloss.Width(left)
+	trailerWidth := lipgloss.Width(trailer)
+
+	keepWidth := leftWidth + trailerWidth + 2 // gap == 2
+	if got := Loader(spinner, status, trailer, keepWidth); !strings.Contains(got, trailer) {
+		t.Errorf("Loader() at gap==2 = %q, want the trailer kept", got)
+	}
+
+	dropWidth := leftWidth + trailerWidth + 1 // gap == 1
+	if got := Loader(spinner, status, trailer, dropWidth); strings.Contains(got, trailer) {
+		t.Errorf("Loader() at gap==1 = %q, want the trailer dropped", got)
+	}
+}
+
 func TestLoaderNoTrailer(t *testing.T) {
 	got := Loader("-", "working", "", 10)
 	if strings.TrimSpace(got) != got {

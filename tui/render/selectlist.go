@@ -27,14 +27,29 @@ func (l *SelectList) Move(delta int) {
 }
 
 // Page moves the selection by one window's worth of items (MaxVisible),
-// wrapping the same way Move does. MaxVisible <= 0 (unlimited) falls back to
-// a single-item step.
+// clamping at either end rather than wrapping the way Move does: one wrong
+// arrow-key press is harmless and reversible, but a coarse page jump that
+// teleported from the last item back to the top would read as a bug. A
+// non-positive MaxVisible (unlimited: conceptually one page) falls back to
+// the full list length, so paging in either direction jumps to that page's
+// edge — Home/End behaviour. A no-op on an empty list.
 func (l *SelectList) Page(delta int) {
+	n := len(l.Items)
+	if n == 0 {
+		return
+	}
 	step := l.MaxVisible
 	if step <= 0 {
-		step = 1
+		step = n
 	}
-	l.Move(delta * step)
+	target := l.Selected + delta*step
+	if target < 0 {
+		target = 0
+	}
+	if target >= n {
+		target = n - 1
+	}
+	l.Selected = target
 }
 
 // Toggle flips the checked state of the current selection. It is a no-op
