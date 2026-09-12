@@ -147,6 +147,15 @@ type Model struct {
 	// ctrl+r — and, on a mouse-capable surface, by clicking the box itself
 	// (Phase 3 Task 16).
 	reasoningCollapsed bool
+	// reasoningResetPending marks that the next reasoningDeltaMsg must start a
+	// fresh trace instead of appending to m.reasoning. Set whenever a
+	// step-boundary reasoningMsg (Callbacks.OnReasoning, which fires with the
+	// COMPLETE block for the step that just ended) lands: that text is
+	// authoritative for the step that just finished, but the next step's
+	// streamed deltas are a new trace, not a continuation of it. Without this,
+	// the first delta of every step after the first would be appended onto
+	// the previous step's complete text and the box would duplicate it.
+	reasoningResetPending bool
 	// reasoningSpanStart/End record the content-relative row span [start, end)
 	// the reasoning box occupies in the viewport's virtualized scrollback for
 	// THIS render — recomputed on every updateViewport pass, never cached
@@ -274,6 +283,14 @@ type Model struct {
 	toolRequestChan  chan chat.ToolCallRequest
 	toolResponseChan chan chat.ToolCallResponse
 	toolResultChan   chan chat.ToolResult
+	// reasoningDeltaChan carries live token-level reasoning deltas from
+	// Callbacks.OnStream (see chat.StreamEvent's "reasoning" kind). Unlike
+	// statusChan/reasoningChan, sends here are blocking (never select+default):
+	// those channels carry step-boundary snapshots where dropping a stale one
+	// is harmless (only the latest matters), but a dropped delta here would
+	// leave a gap in the middle of the accumulated trace. The buffer just
+	// gives a fast token burst some slack before that backpressure kicks in.
+	reasoningDeltaChan chan string
 }
 
 // responseMsg is sent when the AI responds
@@ -311,6 +328,12 @@ type statusMsg string
 
 // reasoningMsg is sent for reasoning updates
 type reasoningMsg string
+
+// reasoningDeltaMsg carries one (possibly coalesced — see listenReasoningDelta)
+// chunk of a live streamed reasoning trace. It is distinct from reasoningMsg,
+// which carries the COMPLETE block at a step boundary: the two are handled
+// with different precedence in Update (see reasoningResetPending).
+type reasoningDeltaMsg string
 
 // toolCallMsg is sent when a tool call needs approval
 type toolCallMsg chat.ToolCallRequest
@@ -393,6 +416,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		agentEventChan:     make(chan chat.AgentEvent, 16),
 		statusChan:         make(chan string, 10),
 		reasoningChan:      make(chan string, 10),
+		reasoningDeltaChan: make(chan string, 256),
 		toolRequestChan:    make(chan chat.ToolCallRequest),
 		toolResponseChan:   make(chan chat.ToolCallResponse),
 		toolResultChan:     make(chan chat.ToolResult, 64),
@@ -452,6 +476,30 @@ func (m Model) initSession() tea.Cmd {
 				case m.reasoningChan <- reasoning:
 				default:
 				}
+			},
+			// OnStream opts the session into cogito's streaming path so the
+			// thinking box fills token-by-token instead of only at step
+			// boundaries (OnReasoning above still fires too — see
+			// reasoningResetPending's doc for how the two are reconciled).
+			//
+			// chat.StreamEvent.Kind is string(cogito.StreamEvent.Type); cogito
+			// defines exactly these values (cogito's stream.go):
+			// "reasoning", "content", "tool_call", "tool_result", "status",
+			// "done", "error", "sub_agent". Only "reasoning" is handled here —
+			// it is the live counterpart to OnReasoning. "content" (the
+			// assistant's streamed answer) is deliberately left unhandled:
+			// streaming the reply into the transcript is Task 24, not this
+			// one. The rest (tool_call/tool_result/status/done/error/
+			// sub_agent) have no bearing on the reasoning box.
+			//
+			// The send is blocking (no select+default): see
+			// reasoningDeltaChan's doc for why a dropped delta is worse here
+			// than in the snapshot-style channels above.
+			OnStream: func(ev chat.StreamEvent) {
+				if ev.Kind != "reasoning" {
+					return
+				}
+				m.reasoningDeltaChan <- ev.Content
 			},
 			OnToolCall: func(req chat.ToolCallRequest) chat.ToolCallResponse {
 				// Send tool request and wait for user response
@@ -970,7 +1018,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf("Reloaded %d durable loop(s).", n)})
 		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenPark(), m.listenCompact(), m.listenPrune())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenReasoningDelta(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenPark(), m.listenCompact(), m.listenPrune())
 
 	case responseMsg:
 		// The run returned: it is no longer parked (all background work drained).
@@ -979,6 +1027,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.interruptArmed = false
 		m.status = ""
 		m.reasoning = ""
+		m.reasoningResetPending = false
 		// Surface any attachments that couldn't be sent (blocked by model caps
 		// or resolution), mirroring the CLI's per-file error lines.
 		for _, b := range msg.blocked {
@@ -1040,6 +1089,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = false
 			m.interruptArmed = false
 			m.reasoning = ""
+			m.reasoningResetPending = false
 			if m.isWorking() {
 				m.status = "Working in the background — type to add a follow-up"
 			} else {
@@ -1201,9 +1251,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case reasoningMsg:
 		m.reasoning = string(msg)
+		// This step just ended: its complete text is authoritative, but the
+		// NEXT step's streamed deltas are a fresh trace, not a continuation of
+		// this one. Mark the next reasoningDeltaMsg to start over rather than
+		// append (see reasoningResetPending's doc).
+		m.reasoningResetPending = true
 		m.updateViewport()
 		// Continue listening for more reasoning updates
 		cmds = append(cmds, m.listenReasoning())
+
+	case reasoningDeltaMsg:
+		if m.reasoningResetPending {
+			m.reasoning = ""
+			m.reasoningResetPending = false
+		}
+		m.reasoning += string(msg)
+		m.updateViewport()
+		// Continue listening for more streamed deltas
+		cmds = append(cmds, m.listenReasoningDelta())
 
 	case toolCallMsg:
 		m.pendingTool = (*chat.ToolCallRequest)(&msg)
@@ -1607,6 +1672,46 @@ func (m Model) listenReasoning() tea.Cmd {
 	}
 }
 
+// listenReasoningDelta listens for live streamed reasoning tokens
+// (Callbacks.OnStream) and re-arms itself after every delivery, same as
+// listenReasoning — a listener that does not re-arm delivers exactly one
+// delta and then goes silent.
+//
+// Render-cost note: a token stream can deliver far faster than a terminal
+// should repaint (an updateViewport per token would be one render per
+// keystroke-equivalent). Rather than invent a timer, this drains whatever is
+// already queued on the channel — accumulated in order — into a single
+// reasoningDeltaMsg before returning. Because bubbletea does not call this
+// again until it has processed the previous message (and re-armed via the
+// cmds append below), the render rate is naturally bounded by how fast Update
+// can process a frame, not by the token rate: a burst that arrives while one
+// frame is still rendering collapses into the next frame instead of queuing
+// one render per token. The final drain is unconditional (it runs once at
+// least, then loops only while more is already buffered), so the last delta
+// of a turn is always included in the message it returns, never left for a
+// call that never comes.
+func (m Model) listenReasoningDelta() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case first := <-m.reasoningDeltaChan:
+			var b strings.Builder
+			b.WriteString(first)
+		drain:
+			for {
+				select {
+				case more := <-m.reasoningDeltaChan:
+					b.WriteString(more)
+				default:
+					break drain
+				}
+			}
+			return reasoningDeltaMsg(b.String())
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
 // listenAgentEvents listens for sub-agent lifecycle events from the session
 func (m Model) listenAgentEvents() tea.Cmd {
 	return func() tea.Msg {
@@ -1676,6 +1781,7 @@ func (m Model) resolveApproval(resp chat.ToolCallResponse) (tea.Model, tea.Cmd) 
 	// The trace that led to this call is answered now; leaving it up reads as
 	// the model re-thinking a step the user already decided.
 	m.reasoning = ""
+	m.reasoningResetPending = false
 	m.loading = true
 	m.status = theme.StatusRunning
 	m.updateViewportFollow()
