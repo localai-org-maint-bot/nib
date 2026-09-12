@@ -10,7 +10,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/tui/render"
 )
@@ -99,17 +98,10 @@ func (presenter) Message(m render.Message, prev render.Role, w int) string {
 		}
 
 	case render.RoleTool:
-		label := m.Name
-		if m.Arguments != "" {
-			// First line of the friendly summary makes the clearest header.
-			summary := chat.FormatToolCall(m.Name, m.Arguments)
-			if nl := strings.IndexByte(summary, '\n'); nl >= 0 {
-				summary = summary[:nl]
-			}
-			if summary != "" {
-				label = summary
-			}
-		}
+		// The label arrives already formatted (Message.Label): turning a tool
+		// name and its raw JSON arguments into a human summary is domain logic
+		// that stays model-side, same as markdown and the ask block.
+		label := m.Label
 		if m.AgentID != "" {
 			label = theme.SubAgent + " " + render.ShortID(m.AgentID) + " · " + label
 		}

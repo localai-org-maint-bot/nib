@@ -1577,6 +1577,27 @@ func (m *Model) updateViewportFollow() {
 	m.updateViewport()
 }
 
+// toolLabel renders a tool call as the one-line heading a tool block carries:
+// the first line of the friendly summary, falling back to the bare tool name
+// when the call has no arguments or the summary comes back empty. It lives
+// model-side because turning a name plus raw JSON arguments into prose is
+// domain logic — the same rule that keeps markdown rendering and the ask block
+// out of the presenters. A Presenter places Message.Label; it never imports
+// chat to build it.
+func toolLabel(name, arguments string) string {
+	if arguments == "" {
+		return name
+	}
+	summary := chat.FormatToolCall(name, arguments)
+	if nl := strings.IndexByte(summary, '\n'); nl >= 0 {
+		summary = summary[:nl]
+	}
+	if summary == "" {
+		return name
+	}
+	return summary
+}
+
 // roleOf maps a ChatMessage's string Role to a render.Role. agent_tool and
 // agent_result — the sub-agent thread-run lines, always rendered directly by
 // renderAgentThreadRun rather than through Presenter.Message — have no
@@ -1689,11 +1710,10 @@ func (m Model) projectedMessages() []render.Message {
 	out := make([]render.Message, 0, len(m.messages))
 	for _, msg := range m.messages {
 		out = append(out, render.Message{
-			Role:      roleOf(msg.Role),
-			Content:   msg.Content,
-			Name:      msg.Name,
-			Arguments: msg.Arguments,
-			AgentID:   msg.AgentID,
+			Role:    roleOf(msg.Role),
+			Content: msg.Content,
+			Label:   toolLabel(msg.Name, msg.Arguments),
+			AgentID: msg.AgentID,
 		})
 	}
 	if m.msgViewCache != nil {
@@ -1804,11 +1824,10 @@ func (m *Model) updateViewport() {
 			prevRole = render.RoleAgent
 		case "tool":
 			sb.WriteString(presenter.Message(render.Message{
-				Role:      render.RoleTool,
-				Content:   msg.Content,
-				Name:      msg.Name,
-				Arguments: msg.Arguments,
-				AgentID:   msg.AgentID,
+				Role:    render.RoleTool,
+				Content: msg.Content,
+				Label:   toolLabel(msg.Name, msg.Arguments),
+				AgentID: msg.AgentID,
 			}, prevRole, contentWidth))
 			prevRole = render.RoleTool
 		case "error":

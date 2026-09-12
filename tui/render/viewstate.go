@@ -14,11 +14,16 @@ const (
 
 // Message is a single rendered chat entry.
 type Message struct {
-	Role      Role
-	Content   string
-	Name      string // tool name, for RoleTool
-	Arguments string // marshaled call args, for RoleTool
-	AgentID   string
+	Role    Role
+	Content string
+	// Label is the one-line heading of a RoleTool block: the tool call already
+	// rendered as a human summary. It arrives formatted because turning a tool
+	// name plus its raw JSON arguments into that summary is domain logic
+	// (chat.FormatToolCall) — the same rule that keeps markdown rendering and
+	// the ask block model-side. A Presenter places it and styles it; it never
+	// imports chat to build it.
+	Label   string
+	AgentID string
 	// HugNext is meaningful for RoleAgent only: true when the next raw message
 	// continues this same agent's thread (a run of agent_tool/agent_result
 	// lines rendered separately by the model, never through Message). A
