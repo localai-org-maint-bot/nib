@@ -142,7 +142,7 @@ func (presenter) Reasoning(v render.ViewState, w int) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(v.Spinner + " " + theme.Reasoning.Render(v.Status))
+	b.WriteString(render.Loader(v.Spinner, v.Status, "", w))
 	b.WriteString("\n")
 	if v.Reasoning.Text != "" {
 		b.WriteString(theme.ReasoningHeader() + "\n")
