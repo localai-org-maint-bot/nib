@@ -711,12 +711,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.WindowSizeMsg:
+		// Captured BEFORE updateDimensions() touches m.viewport.Height: AtBottom()
+		// is relative to the current height, so resizing first (in particular
+		// shrinking) can make a user who WAS pinned to the bottom read as
+		// scrolled-up before their follow state is ever consulted.
+		wasAtBottom := m.viewport.AtBottom()
 		m.width = msg.Width
 		m.height = msg.Height
 		m.updateDimensions()
 		// Content is wrapped to a width that no longer exists, and the offset was
 		// clamped against the old height — both have to be recomputed.
-		m.updateViewport()
+		if wasAtBottom {
+			m.updateViewportFollow()
+		} else {
+			m.updateViewport()
+		}
 
 	case sessionReadyMsg:
 		if msg.err != nil {
@@ -1050,9 +1059,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// `G` jumps to the newest output, but only when it is not being typed into a
-	// message. vim-style, matching the ↑↓ scroll keys already advertised.
+	// message AND there is somewhere to jump back from. vim-style, matching the
+	// ↑↓ scroll keys already advertised. Without the AtBottom check, `G` fires
+	// whenever the composer is empty — which is exactly the state the user's
+	// FIRST keystroke of a new message finds it in, silently eating it.
 	if k, ok := msg.(tea.KeyMsg); ok && k.Type == tea.KeyRunes && len(k.Runes) == 1 &&
-		k.Runes[0] == 'G' && strings.TrimSpace(m.textarea.Value()) == "" {
+		k.Runes[0] == 'G' && !m.viewport.AtBottom() && strings.TrimSpace(m.textarea.Value()) == "" {
 		m.viewport.GotoBottom()
 		return m, tea.Batch(cmds...)
 	}

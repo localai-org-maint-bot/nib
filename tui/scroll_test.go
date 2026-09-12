@@ -97,6 +97,35 @@ func TestResizeRewrapsAndClamps(t *testing.T) {
 	}
 }
 
+// TestResizeAtBottomStaysFollowing covers the whole-branch review finding:
+// updateDimensions() used to shrink m.viewport.Height BEFORE updateViewport()
+// captured wasAtBottom against the still-old content, so a user pinned to the
+// bottom could read as scrolled-up the moment the terminal shrank and get
+// stranded in scrollback.
+func TestResizeAtBottomStaysFollowing(t *testing.T) {
+	m := Model{
+		viewport: viewport.New(80, 10),
+		textarea: textarea.New(),
+		width:    80,
+		height:   24,
+	}
+	for i := 0; i < 60; i++ {
+		m.messages = append(m.messages, ChatMessage{Role: "user", Content: "history line"})
+	}
+	m.updateViewport()
+	m.viewport.GotoBottom()
+	if !m.viewport.AtBottom() {
+		t.Fatal("precondition: expected to be at bottom before resize")
+	}
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
+	nm := next.(Model)
+
+	if !nm.viewport.AtBottom() {
+		t.Error("shrinking the terminal while pinned to the bottom stranded the user in scrollback")
+	}
+}
+
 // TestUpdateViewportFollowSnapsToBottom covers the reported bug: the user
 // scrolls up to re-read history, sends a message, and the reply streams in below
 // the fold because the preserve-scroll guard saw wasAtBottom == false.
@@ -145,6 +174,28 @@ func TestEndKeyJumpsToBottom(t *testing.T) {
 		if !next.(Model).viewport.AtBottom() {
 			t.Errorf("key %v did not jump to the bottom", key)
 		}
+	}
+}
+
+// TestGAtBottomFallsThroughToComposer guards the whole-branch review finding:
+// the `G` shortcut used to fire whenever the composer was empty, which is
+// exactly the state the user's FIRST keystroke of a new message finds it in.
+// At the bottom there is nowhere for `G` to jump back from, so it must reach
+// the textarea like any other rune.
+func TestGAtBottomFallsThroughToComposer(t *testing.T) {
+	ta := textarea.New()
+	ta.Focus()
+
+	m := Model{viewport: viewport.New(40, 4), width: 40, textarea: ta}
+	fillMessages(&m, 40)
+	m.updateViewport()
+	m.viewport.GotoBottom()
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	nm := next.(Model)
+
+	if nm.textarea.Value() != "G" {
+		t.Errorf("G at the bottom did not reach the composer: got %q, want %q", nm.textarea.Value(), "G")
 	}
 }
 
