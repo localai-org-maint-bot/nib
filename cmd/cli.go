@@ -573,7 +573,22 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 					fmt.Fprintln(out, theme.Subtle.Render(fmt.Sprintf("cleared %d staged attachment(s)", n)))
 				}
 				continue
-			default: // slash.KindSend
+			case slash.KindYolo:
+				// A session-wide flag, same as the TUI's: works perfectly well
+				// outside a picker or popup, so it gets a real case rather than
+				// falling into the "not available" default below.
+				on := !session.AutoApprove()
+				if action.YoloOn != nil {
+					on = *action.YoloOn
+				}
+				session.SetAutoApprove(on)
+				notice := theme.YoloOff
+				if on {
+					notice = theme.YoloOn
+				}
+				fmt.Fprintln(out, theme.Subtle.Render(notice))
+				continue
+			case slash.KindSend:
 				fmt.Fprintln(out)
 				spin.start(theme.VerbThinking)
 				files, overrides := attachstage.BuildSend(pending, action)
@@ -595,6 +610,21 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 					fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
 				}
 				fmt.Fprintln(out)
+			default:
+				// Any Kind without an explicit case above has no CLI meaning:
+				// /resume has no picker surface here, and /loop and /goal (the
+				// pre-existing hole this task also closes) have nothing in this
+				// REPL to drive them either. Refusing here — rather than
+				// falling through to KindSend, the previous behavior — is the
+				// actual fix: the next Kind slash.Resolve grows lands here
+				// automatically instead of being silently sent to the model as
+				// chat text.
+				msg := fmt.Sprintf(theme.CLINotAvailable, cliKindName(action.Kind))
+				if action.Kind == slash.KindResume {
+					msg += " " + theme.CLIResumeHint
+				}
+				fmt.Fprintln(out, theme.Subtle.Render(msg))
+				continue
 			}
 		}
 	}
@@ -643,6 +673,23 @@ func pruneNotice(results, freed int) string {
 func compactNotice(before, after int) string {
 	return fmt.Sprintf("Compacted conversation — ~%s → ~%s tokens (estimated)",
 		chat.HumanTokensOrZero(before), chat.HumanTokensOrZero(after))
+}
+
+// cliKindName names a resolved slash.Kind for the CLI's "not available"
+// notice (theme.CLINotAvailable). Only kinds that can actually reach that
+// default arm need an entry here; anything left out still gets refused, just
+// with a generic name instead of a specific one.
+func cliKindName(k slash.Kind) string {
+	switch k {
+	case slash.KindLoopStart, slash.KindLoopStop, slash.KindLoopList:
+		return "/loop"
+	case slash.KindGoalSet, slash.KindGoalShow, slash.KindGoalClear:
+		return "/goal"
+	case slash.KindResume:
+		return "/resume"
+	default:
+		return "that command"
+	}
 }
 
 func help(out io.Writer) {

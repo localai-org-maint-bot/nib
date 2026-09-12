@@ -40,6 +40,20 @@ const (
 	CLIWelcome = "a calm assistant for your terminal."
 	CLIExit    = "ctrl+c or 'exit' to leave · 'help' for commands"
 
+	// CLINotAvailable is the CLI dispatch loop's catch-all for a resolved
+	// slash.Action whose Kind has no explicit case there — a %s format string
+	// naming the command. It exists so a Kind with no CLI meaning (no picker,
+	// no popup, nothing to wire up) is refused with a clear message instead of
+	// silently falling through to KindSend and reaching the model as chat
+	// text — see cmd/cli.go's default arm.
+	CLINotAvailable = "%s is not available in CLI mode."
+
+	// CLIResumeHint is appended to CLINotAvailable for /resume specifically:
+	// unlike /loop or /goal, it has a real non-interactive equivalent already
+	// wired up (app.applyResumeFlag), so the refusal can point at it instead
+	// of just saying no.
+	CLIResumeHint = "restart with `nib --resume` (or `nib --resume <id>`) to load a recorded session."
+
 	// Shown when a CLI approval prompt gets no answer at all. A closed stdin
 	// (the piped one-shot idiom) and a cancelled run are both "nobody
 	// decided", which is not a yes, so the call is denied.
