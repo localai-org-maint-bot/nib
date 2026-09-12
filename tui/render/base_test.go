@@ -1,6 +1,9 @@
 package render
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestBaseContentWidthUsesInjectedPrefix pins the embedding fix Task 17
 // depends on: Base cannot call back into an embedder's own contentPrefix (Go
@@ -21,6 +24,23 @@ func TestBaseContentWidthClampsToAtLeastOne(t *testing.T) {
 	if got := b.ContentWidth(RoleUser, 5); got != 1 {
 		t.Errorf("ContentWidth = %d, want 1 (clamped)", got)
 	}
+}
+
+// TestBaseContentWidthPanicsWithoutPrefix pins the loud-failure contract: a
+// future third presenter that embeds Base and forgets to wire up Prefix must
+// get a clear panic naming the cause, not a bare nil-func dereference and
+// never a silent default that would render the wrong chrome.
+func TestBaseContentWidthPanicsWithoutPrefix(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("ContentWidth with a nil Prefix did not panic")
+		}
+		if msg, ok := r.(string); !ok || !strings.Contains(msg, "Prefix") {
+			t.Errorf("panic value = %v, want a message naming Prefix", r)
+		}
+	}()
+	Base{}.ContentWidth(RoleUser, 10)
 }
 
 // TestBaseHeaderHeightMatchesHeader ties HeaderHeight to Header's own output

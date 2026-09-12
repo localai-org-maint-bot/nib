@@ -43,7 +43,16 @@ type Base struct {
 // surface's chrome (b.Prefix) is accounted for. The result is clamped to at
 // least 1: a terminal narrower than the chrome must still give a renderer a
 // legal width rather than zero or a negative one.
+//
+// Panics if Prefix is nil — a Presenter that embeds Base without wiring it up
+// (inline/full's New() both do) would otherwise fail with a bare nil-func
+// dereference at the call site, naming neither the cause nor the culprit.
+// Silently defaulting instead would render the wrong chrome for whichever
+// surface forgot to set it, which is worse than a loud failure.
 func (b Base) ContentWidth(role Role, w int) int {
+	if b.Prefix == nil {
+		panic("render: Base.Prefix not set")
+	}
 	cw := w - lipgloss.Width(b.Prefix(role))
 	if cw < 1 {
 		cw = 1
