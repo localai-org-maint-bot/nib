@@ -225,9 +225,10 @@ func (presenter) Dialog(d render.Dialog, w int) string {
 				b.WriteString(gutter + optionStyle(opt).Render(opt.Text) + "\n")
 			}
 		default:
-			// Unexpected count: degrade visibly rather than render nothing.
+			// Unexpected count: degrade visibly rather than render nothing,
+			// still respecting each option's own Emphasis.
 			for _, opt := range d.Options {
-				b.WriteString(gutter + theme.ApproveKey.Render(opt.Text) + "\n")
+				b.WriteString(gutter + optionStyle(opt).Render(opt.Text) + "\n")
 			}
 		}
 		return b.String()
@@ -258,6 +259,21 @@ func (presenter) Header(v render.ViewState) string {
 	return b.String()
 }
 
+// footerRowStyle renders one FooterRow's text (glyph already prefixed), per
+// its Kind. FooterJobs/FooterShell reproduce the original theme.Meta +
+// width-fill treatment (Width doesn't just pad — lipgloss wraps content
+// exceeding w, so a narrow terminal hard-wraps instead of spilling, exactly
+// as before); FooterLoops/FooterGoal reproduce the original theme.Subtle,
+// unfilled.
+func footerRowStyle(kind render.FooterRowKind, text string, w int) string {
+	switch kind {
+	case render.FooterJobs, render.FooterShell:
+		return theme.Meta.Width(w).Render(text)
+	default:
+		return theme.Subtle.Render(text)
+	}
+}
+
 // Footer renders the new-output marker (when scrolled up with unread content
 // below the fold), the help/badges line, the error line, and the job-status
 // footer rows — everything that lives between the composer and the bottom of
@@ -285,7 +301,7 @@ func (presenter) Footer(v render.ViewState, w int) string {
 		if row.Glyph != "" {
 			text = row.Glyph + " " + text
 		}
-		b.WriteString("\n" + theme.Subtle.Render(text))
+		b.WriteString("\n" + footerRowStyle(row.Kind, text, w))
 	}
 	return b.String()
 }

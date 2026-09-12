@@ -33,6 +33,11 @@ type Message struct {
 // working indicator (spinner + status), which lives on ViewState.Spinner and
 // ViewState.Status — kept there only, so there is exactly one source of
 // truth for them.
+//
+// Collapsed and MaxLines have no producer or consumer yet: Phase 3 Task 10
+// (collapsible reasoning) is what populates and reads them. Kept and
+// documented now rather than added speculatively later, since the plan
+// already commits to that task.
 type Reasoning struct {
 	Text      string
 	Collapsed bool
@@ -94,27 +99,52 @@ type Dialog struct {
 	Hint             string
 }
 
+// FooterRowKind identifies which footer row a FooterRow is, so a Presenter can
+// map it to the right style. The four rows are not all styled alike (the
+// original hand-rolled footer gave jobs/shell one treatment and loops/goal
+// another), so this is domain data the tui-side builders supply — not
+// something a Presenter can infer from Glyph/Text alone.
+type FooterRowKind int
+
+const (
+	FooterJobs FooterRowKind = iota
+	FooterShell
+	FooterLoops
+	FooterGoal
+)
+
 // FooterRow is one line of the footer's job-status area (active sub-agent
 // jobs, shell jobs, cron loops, the active goal). It carries data, not
 // pixels: Glyph is the marker rune (e.g. theme.Loop), Text is the already-
-// composed but UNSTYLED line. A Presenter decides the styling; the tui-side
-// callers that build these (tui/agents.go, tui/shelljobs.go, tui/loops.go,
-// tui/goal.go) must not depend on any Presenter or style types, only produce
-// plain data, since a Presenter must never import their argument types
-// (agentJob, *loop.Registry, wizmcp.ShellJobInfo).
+// composed but UNSTYLED line, and Kind says which of the four rows this is so
+// a Presenter can apply the right style (FooterJobs/FooterShell get the
+// original theme.Meta + width-fill treatment; FooterLoops/FooterGoal get
+// theme.Subtle, unfilled — see inline.Footer). The tui-side callers that
+// build these (tui/agents.go, tui/shelljobs.go, tui/loops.go, tui/goal.go)
+// must not depend on any Presenter or style types, only produce plain data,
+// since a Presenter must never import their argument types (agentJob,
+// *loop.Registry, wizmcp.ShellJobInfo).
 type FooterRow struct {
 	Glyph string
 	Text  string
+	Kind  FooterRowKind
 }
 
 // ViewState is the read-only projection of Model state a Presenter renders
 // from. It carries no behaviour — presenters read it and produce strings.
 //
 // The model builds one ViewState per frame (see tui/model.go's viewState
-// method) with every field populated — Messages/Reasoning/Dialog included,
+// method) with every field populated — Messages/Reasoning/Dialogs included,
 // even though the inline Presenter's Header/Footer never read them — so nothing
 // here is silently nil for a Presenter that composes a whole alt-screen frame
 // from one ViewState rather than being driven block-by-block.
+//
+// Dialogs is a slice, not a single *Dialog, because more than one prompt can
+// be pending at once: a background sub-agent's gated tool approval and a
+// foreground ask_user question are independent and not mutually exclusive
+// (cogito propagates the tool-call callback into spawned sub-agents, which
+// run in the background — see chat/session.go). A Presenter renders each in
+// order; ordinarily the slice holds zero or one entry.
 //
 // Fields from NewOutput onward were added by Task 6, which is the first to
 // actually build a ViewState (Task 5 declared the struct with no call sites).
@@ -127,9 +157,9 @@ type FooterRow struct {
 //     !m.viewport.AtBottom()) itself and passes the answer through.
 //   - Err: the plain (unstyled) text of the model's last error, or "" for
 //     none. The presenter applies the error glyph and style.
-//   - Footers: plain {Glyph, Text} data for the active-jobs/shell-jobs/loops/
-//     goal footer rows (see FooterRow) — the presenter styles and joins
-//     whichever are present, in order.
+//   - Footers: plain {Glyph, Text, Kind} data for the active-jobs/shell-jobs/
+//     loops/goal footer rows (see FooterRow) — the presenter styles (per
+//     Kind) and joins whichever are present, in order.
 type ViewState struct {
 	Width       int
 	Height      int
@@ -141,7 +171,7 @@ type ViewState struct {
 	Spinner     string
 	Messages    []Message
 	Reasoning   Reasoning
-	Dialog      *Dialog
+	Dialogs     []Dialog
 	Help        string
 	Badges      string
 

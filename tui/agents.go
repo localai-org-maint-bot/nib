@@ -84,15 +84,13 @@ type agentJob struct {
 	Status chat.AgentStatus
 }
 
-var jobsFooterStyle = theme.Meta
-
-// jobsFooterText builds the plain (unstyled) jobs-footer text — the counts and
-// the background/logs hint — or "" when there are no jobs to report. Shared by
-// renderJobsFooter (styled, directly unit-tested) and jobsFooterRow (plain
-// data for render.FooterRow) so the two can never drift apart.
-func jobsFooterText(jobs []agentJob) string {
+// jobsFooterRow returns the plain {Glyph, Text, Kind} data for the jobs
+// footer (no glyph — the jobs line has never carried one) and whether there
+// is one to show. The presenter styles it (render.FooterJobs gets the
+// original theme.Meta + width-fill treatment — see inline.Footer).
+func jobsFooterRow(jobs []agentJob) (render.FooterRow, bool) {
 	if len(jobs) == 0 {
-		return ""
+		return render.FooterRow{}, false
 	}
 	var running, done, failed int
 	for _, j := range jobs {
@@ -113,28 +111,7 @@ func jobsFooterText(jobs []agentJob) string {
 		parts = append(parts, fmt.Sprintf("%d failed", failed))
 	}
 	parts = append(parts, "(ctrl+b background · ctrl+o logs)")
-	return strings.Join(parts, "  ·  ")
-}
-
-// renderJobsFooter renders a compact one-line summary of active jobs.
-// Returns "" when there are no jobs so the footer takes no vertical space.
-func renderJobsFooter(jobs []agentJob, width int) string {
-	text := jobsFooterText(jobs)
-	if text == "" {
-		return ""
-	}
-	return jobsFooterStyle.Width(width).Render(text)
-}
-
-// jobsFooterRow returns the plain {Glyph, Text} data for the jobs footer (no
-// glyph — the jobs line has never carried one) and whether there is one to
-// show. The presenter styles it.
-func jobsFooterRow(jobs []agentJob) (render.FooterRow, bool) {
-	text := jobsFooterText(jobs)
-	if text == "" {
-		return render.FooterRow{}, false
-	}
-	return render.FooterRow{Text: text}, true
+	return render.FooterRow{Text: strings.Join(parts, "  ·  "), Kind: render.FooterJobs}, true
 }
 
 // toolApprovalLabel builds the tool-approval header, labeling sub-agent calls.

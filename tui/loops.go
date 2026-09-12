@@ -37,19 +37,21 @@ func durationToCron(d time.Duration) string {
 	}
 }
 
-// loopsFooterText builds the plain (unstyled, unglyphed) loops-footer text, or
-// "" and false when nothing is active. Shared by renderLoopsFooter (styled,
-// directly unit-tested) and loopsFooterRow (plain data for render.FooterRow).
-func loopsFooterText(r *loop.Registry, selfPaced int) (string, bool) {
+// loopsFooterRow returns the plain {Glyph, Text, Kind} data for the loops
+// footer, and whether there is one to show. The presenter styles it
+// (render.FooterLoops gets the original theme.Subtle, unfilled treatment —
+// see inline.Footer).
+func loopsFooterRow(r *loop.Registry, selfPaced int) (render.FooterRow, bool) {
 	if r == nil {
 		if selfPaced == 0 {
-			return "", false
+			return render.FooterRow{}, false
 		}
-		return fmt.Sprintf("%d loop(s): %d self-paced  (/loop list · /loop stop)", selfPaced, selfPaced), true
+		text := fmt.Sprintf("%d loop(s): %d self-paced  (/loop list · /loop stop)", selfPaced, selfPaced)
+		return render.FooterRow{Glyph: theme.Loop, Text: text, Kind: render.FooterLoops}, true
 	}
 	jobs := r.List()
 	if len(jobs) == 0 && selfPaced == 0 {
-		return "", false
+		return render.FooterRow{}, false
 	}
 	var parts []string
 	for _, j := range jobs {
@@ -58,27 +60,8 @@ func loopsFooterText(r *loop.Registry, selfPaced int) (string, bool) {
 	if selfPaced > 0 {
 		parts = append(parts, fmt.Sprintf("%d self-paced", selfPaced))
 	}
-	return fmt.Sprintf("%d loop(s): %s  (/loop list · /loop stop)", len(jobs)+selfPaced, strings.Join(parts, " · ")), true
-}
-
-// renderLoopsFooter renders a one-line summary of active cron loops, plus a
-// self-paced indicator when selfPaced > 0. Returns "" when nothing is active.
-func renderLoopsFooter(r *loop.Registry, selfPaced, width int) string {
-	text, ok := loopsFooterText(r, selfPaced)
-	if !ok {
-		return ""
-	}
-	return theme.Subtle.Render(theme.Loop + " " + text)
-}
-
-// loopsFooterRow returns the plain {Glyph, Text} data for the loops footer,
-// and whether there is one to show. The presenter styles it.
-func loopsFooterRow(r *loop.Registry, selfPaced int) (render.FooterRow, bool) {
-	text, ok := loopsFooterText(r, selfPaced)
-	if !ok {
-		return render.FooterRow{}, false
-	}
-	return render.FooterRow{Glyph: theme.Loop, Text: text}, true
+	text := fmt.Sprintf("%d loop(s): %s  (/loop list · /loop stop)", len(jobs)+selfPaced, strings.Join(parts, " · "))
+	return render.FooterRow{Glyph: theme.Loop, Text: text, Kind: render.FooterLoops}, true
 }
 
 // dispatchLoop runs a due loop payload, routing by run-state: inject into a

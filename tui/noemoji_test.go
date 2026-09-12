@@ -28,14 +28,15 @@ func TestNoEmojiInRenderHelpers(t *testing.T) {
 		t.Fatalf("renderAsk output contains emoji: %q", ask)
 	}
 
-	// Jobs footer (running/done/failed counts).
-	footer := renderJobsFooter([]agentJob{
+	// Jobs footer (running/done/failed counts). jobsFooterRow is the live path
+	// View() calls — renderJobsFooter (the fully-styled string this test used
+	// to check) was deleted once it had zero production call sites left.
+	if row, ok := jobsFooterRow([]agentJob{
 		{ID: "a1", Type: "explore", Task: "scan", Status: chat.AgentStatusRunning},
 		{ID: "b2", Type: "plan", Task: "draft", Status: chat.AgentStatusCompleted},
 		{ID: "c3", Type: "edit", Task: "patch", Status: chat.AgentStatusFailed},
-	}, 80)
-	if containsEmoji(footer) {
-		t.Fatalf("renderJobsFooter output contains emoji: %q", footer)
+	}); ok && containsEmoji(row.Glyph+row.Text) {
+		t.Fatalf("jobsFooterRow output contains emoji: %q", row.Text)
 	}
 
 	// Tool-approval labels, both sub-agent and root variants.

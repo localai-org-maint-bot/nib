@@ -50,6 +50,11 @@ type Model struct {
 	// built as a bare struct literal (as many tests do) — updateViewport and
 	// View fall back to inline.New() in that case.
 	presenter render.Presenter
+	// msgViewCache caches the []render.Message projection of messages built for
+	// ViewState.Messages, so View (called on every spinner tick) doesn't
+	// re-copy the whole transcript when it hasn't changed. See
+	// messageProjCache / projectedMessages. nil on a bare Model{} literal.
+	msgViewCache *messageProjCache
 
 	// Chat state
 	messages     []ChatMessage
@@ -280,6 +285,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		textarea:         ta,
 		spinner:          s,
 		presenter:        inline.New(),
+		msgViewCache:     &messageProjCache{},
 		messages:         []ChatMessage{},
 		ctx:              ctx,
 		cancel:           cancel,
@@ -1587,14 +1593,20 @@ func roleOf(s string) render.Role {
 	return render.RoleNone
 }
 
-// currentDialog returns the render.Dialog for whichever prompt is pending
-// (tool approval or ask), or nil when neither is. Shared by updateViewport
-// (which renders it) and viewState (which projects it onto ViewState.Dialog
-// so the field is never silently nil for a Presenter reading the whole
-// frame).
-func (m Model) currentDialog() *render.Dialog {
-	switch {
-	case m.awaitingApproval && m.pendingTool != nil:
+// currentDialogs returns the render.Dialog for every prompt currently
+// pending, in the same order the original hand-rolled code rendered them
+// (approval block, then ask block). Both a background sub-agent's gated tool
+// approval and a foreground ask_user question can be pending at once — cogito
+// propagates the tool-call callback into spawned sub-agents (chat/session.go),
+// which run in the background while the root agent can independently be
+// blocked on ask_user — so this must not assume they're mutually exclusive:
+// an earlier version of this method returned only one and the other silently
+// vanished from the screen. Shared by updateViewport (which renders each) and
+// viewState (which projects them onto ViewState.Dialogs so the field is never
+// silently nil for a Presenter reading the whole frame).
+func (m Model) currentDialogs() []render.Dialog {
+	var dialogs []render.Dialog
+	if m.awaitingApproval && m.pendingTool != nil {
 		rows, unstructured := approvalRows(*m.pendingTool)
 		var options []render.DialogOption
 		if m.approvalEditing {
@@ -1608,21 +1620,66 @@ func (m Model) currentDialog() *render.Dialog {
 				{Text: theme.ApproveDenyEdit, Emphasis: false},
 			}
 		}
-		return &render.Dialog{
+		dialogs = append(dialogs, render.Dialog{
 			Kind:             render.DialogApproval,
 			Title:            toolApprovalLabel(*m.pendingTool),
 			Rows:             rows,
 			RowsUnstructured: unstructured,
 			Hint:             m.pendingTool.Reasoning,
 			Options:          options,
-		}
-	case m.awaitingAsk && m.pendingAsk != nil:
-		return &render.Dialog{
+		})
+	}
+	// Guarded the same way as the approval branch above: renderAsk actually
+	// runs only when a question is pending, not on every frame.
+	if m.awaitingAsk && m.pendingAsk != nil {
+		dialogs = append(dialogs, render.Dialog{
 			Kind:  render.DialogAsk,
 			Title: renderAsk(*m.pendingAsk, m.width),
-		}
+		})
 	}
-	return nil
+	return dialogs
+}
+
+// messageProjCache caches the last render.Message projection of m.messages,
+// keyed by transcript length. It lives behind a pointer so even a
+// value-receiver Model method (View, viewState, projectedMessages) can update
+// it in place: bubbletea's Update/View both take Model by value, but every
+// copy shares the same pointee, so the cache persists across frames without
+// needing a pointer-receiver Model. nil on a bare Model{} literal, as many
+// tests construct — projectedMessages falls back to an uncached build then.
+type messageProjCache struct {
+	len  int
+	msgs []render.Message
+}
+
+// projectedMessages returns the []render.Message projection of m.messages,
+// used only for ViewState.Messages completeness (see viewState) — nothing in
+// this package's own rendering path reads it; updateViewport drives its loop
+// from m.messages directly. Without caching this re-copied and re-mapped the
+// whole transcript on every View() call, which happens on every spinner tick
+// (~10Hz) whether or not the transcript changed since the last frame. Since
+// every mutation of m.messages in this codebase is an append (verified: no
+// call site replaces or edits it in place), the transcript length is a
+// correct invalidation key.
+func (m Model) projectedMessages() []render.Message {
+	if m.msgViewCache != nil && m.msgViewCache.len == len(m.messages) {
+		return m.msgViewCache.msgs
+	}
+	out := make([]render.Message, 0, len(m.messages))
+	for _, msg := range m.messages {
+		out = append(out, render.Message{
+			Role:      roleOf(msg.Role),
+			Content:   msg.Content,
+			Name:      msg.Name,
+			Arguments: msg.Arguments,
+			AgentID:   msg.AgentID,
+		})
+	}
+	if m.msgViewCache != nil {
+		m.msgViewCache.len = len(m.messages)
+		m.msgViewCache.msgs = out
+	}
+	return out
 }
 
 // viewState builds the full ViewState for the current frame: every field
@@ -1636,17 +1693,6 @@ func (m Model) viewState() render.ViewState {
 		status = theme.VerbThinking
 	}
 
-	messages := make([]render.Message, 0, len(m.messages))
-	for _, msg := range m.messages {
-		messages = append(messages, render.Message{
-			Role:      roleOf(msg.Role),
-			Content:   msg.Content,
-			Name:      msg.Name,
-			Arguments: msg.Arguments,
-			AgentID:   msg.AgentID,
-		})
-	}
-
 	return render.ViewState{
 		Width:       m.width,
 		Height:      m.height,
@@ -1656,9 +1702,9 @@ func (m Model) viewState() render.ViewState {
 		Loading:     m.loading,
 		Status:      status,
 		Spinner:     m.spinner.View(),
-		Messages:    messages,
+		Messages:    m.projectedMessages(),
 		Reasoning:   render.Reasoning{Text: m.reasoning},
-		Dialog:      m.currentDialog(),
+		Dialogs:     m.currentDialogs(),
 	}
 }
 
@@ -1692,6 +1738,12 @@ func (m *Model) updateViewport() {
 			m.renderAgentThreadRun(&sb, m.messages[i:j], contentWidth, lastAgent != msg.AgentID, m.sameAgentMsg(j, msg.AgentID))
 			lastAgent = msg.AgentID
 			i = j - 1
+			// A thread run isn't rendered through Message, so nothing sets
+			// prevRole for it above — but a following Message call still needs
+			// an accurate "what rendered last" answer (Phase 3 Task 12 reads
+			// prev to drop labels on consecutive same-role messages). RoleAgent
+			// is the same fit roleOf uses for these raw roles.
+			prevRole = render.RoleAgent
 			continue
 		}
 
@@ -1747,11 +1799,14 @@ func (m *Model) updateViewport() {
 	// vs carries everything Reasoning/Dialog need (and, for I1 completeness,
 	// everything Header/Footer need too, even though this function never calls
 	// those). Reasoning renders nothing when !vs.Loading, so the call is
-	// unconditional; Dialog is only called when a dialog is actually pending.
+	// unconditional; Dialogs renders each pending dialog in turn (ordinarily
+	// zero or one, but a background sub-agent's tool approval and a
+	// foreground ask_user question can both be pending at once — see
+	// currentDialogs — and the original hand-rolled code rendered both).
 	vs := m.viewState()
 	sb.WriteString(presenter.Reasoning(vs, contentWidth))
-	if vs.Dialog != nil {
-		sb.WriteString(presenter.Dialog(*vs.Dialog, contentWidth))
+	for _, d := range vs.Dialogs {
+		sb.WriteString(presenter.Dialog(d, contentWidth))
 	}
 
 	// Preserve the user's scroll position: only follow to the bottom when they
