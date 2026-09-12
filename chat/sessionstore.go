@@ -189,6 +189,14 @@ func (s *SessionStore) prune(keepID string) {
 	if len(candidates) <= keepOthers {
 		return
 	}
+	// Sorting by file mtime is a proxy for "newest by Updated" — sound today
+	// because Save is the only call site, it always sets Updated: time.Now()
+	// immediately before writing, and os.Rename preserves the content file's
+	// mtime rather than resetting it. Nothing enforces that pairing, though:
+	// a future call site that backdates Updated (an import feature, say)
+	// would keep the wrong sessions here without this sort noticing anything
+	// is wrong. If Updated ever stops meaning "when this was saved", this
+	// needs to sort by List()'s parsed Updated field instead of mtime.
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].modTime.After(candidates[j].modTime) })
 	for _, c := range candidates[keepOthers:] {
 		if err := os.Remove(c.path); err != nil && !os.IsNotExist(err) {

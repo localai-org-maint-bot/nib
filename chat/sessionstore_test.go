@@ -307,6 +307,70 @@ func TestSessionStoreSavePrunesBeyondCap(t *testing.T) {
 	}
 }
 
+// TestSessionStoreSaveAtCapDoesNotPrune covers the "exactly at cap" boundary
+// that TestSessionStoreSavePrunesBeyondCap does not exercise: the exempted
+// session being written COUNTS toward the cap, so with MaxSessions=3, saving
+// a 3rd session must leave all 3 on disk rather than pruning down to 2.
+func TestSessionStoreSaveAtCapDoesNotPrune(t *testing.T) {
+	dir := t.TempDir()
+	store := NewSessionStore(dir)
+	// Large during setup, same reasoning as TestSessionStoreSavePrunesBeyondCap:
+	// nothing should be pruned while the first two mtimes are staggered by hand.
+	store.MaxSessions = 100
+
+	base := time.Now().Add(-time.Hour)
+	for i, id := range []string{"a", "b"} {
+		mustSave(t, store, SessionRecord{ID: id, Cwd: "/p"})
+		mt := base.Add(time.Duration(i) * time.Minute)
+		if err := os.Chtimes(filepath.Join(dir, id+".json"), mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Now impose the real cap and save the 3rd session: disk settles at
+	// exactly MaxSessions (3), so nothing should be pruned.
+	store.MaxSessions = 3
+	mustSave(t, store, SessionRecord{ID: "c", Cwd: "/p"})
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("directory has %d files at exactly the cap, want 3 (no pruning): %v", len(entries), entries)
+	}
+	for _, want := range []string{"a.json", "b.json", "c.json"} {
+		if _, err := os.Stat(filepath.Join(dir, want)); err != nil {
+			t.Errorf("expected %s to survive (at cap, nothing pruned): %v", want, err)
+		}
+	}
+}
+
+// TestSessionStoreSaveOneUnderCapDoesNotPrune covers the cap-1 boundary:
+// saving a 2nd session under a cap of 3 must not prune anything either.
+func TestSessionStoreSaveOneUnderCapDoesNotPrune(t *testing.T) {
+	dir := t.TempDir()
+	store := NewSessionStore(dir)
+	store.MaxSessions = 100
+	mustSave(t, store, SessionRecord{ID: "a", Cwd: "/p"})
+
+	store.MaxSessions = 3
+	mustSave(t, store, SessionRecord{ID: "b", Cwd: "/p"})
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("directory has %d files one under the cap, want 2 (no pruning): %v", len(entries), entries)
+	}
+	for _, want := range []string{"a.json", "b.json"} {
+		if _, err := os.Stat(filepath.Join(dir, want)); err != nil {
+			t.Errorf("expected %s to survive (under cap, nothing pruned): %v", want, err)
+		}
+	}
+}
+
 // TestSessionStorePruneNeverDeletesTheExemptSession is the sharpest form of
 // the Task 20 brief's central danger: "pruning must never delete the session
 // currently being written." A naive prune (sort everyone including the

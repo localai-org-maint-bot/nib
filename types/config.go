@@ -253,7 +253,7 @@ type Config struct {
 	// pruned on every save, except the session currently being written
 	// (chat.SessionStore.prune's keepID). 0 (unset) means the store's own
 	// default, chat.DefaultMaxSessions (200).
-	SessionRetention int `yaml:"session_retention,omitempty"`
+	SessionRetention int `yaml:"session_retention"`
 }
 
 type PromptInjectionProtectionConfig struct {
