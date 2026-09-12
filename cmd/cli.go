@@ -693,5 +693,5 @@ func cliKindName(k slash.Kind) string {
 }
 
 func help(out io.Writer) {
-	fmt.Fprintln(out, theme.Help.Render("commands:  exit  ·  clear  ·  help"))
+	fmt.Fprintln(out, theme.Help.Render(theme.CLIHelp))
 }

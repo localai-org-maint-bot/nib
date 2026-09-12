@@ -40,6 +40,11 @@ const (
 	CLIWelcome = "a calm assistant for your terminal."
 	CLIExit    = "ctrl+c or 'exit' to leave · 'help' for commands"
 
+	// CLIHelp is cmd/cli.go's help() output — the CLI's own command list, kept
+	// separate from the TUI's slash-completion popup. /yolo works in CLI mode
+	// (cmd/cli.go's KindYolo case) and belongs here alongside exit/clear/help.
+	CLIHelp = "commands:  exit  ·  clear  ·  help  ·  /yolo"
+
 	// CLINotAvailable is the CLI dispatch loop's catch-all for a resolved
 	// slash.Action whose Kind has no explicit case there — a %s format string
 	// naming the command. It exists so a Kind with no CLI meaning (no picker,
