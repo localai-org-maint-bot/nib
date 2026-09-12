@@ -30,6 +30,7 @@ var (
 	Sep            = "·"  // separator between label and message / list items
 	PromptGlyph    = "›"  // input prompt
 	ApprovalGutter = "▏"  // left rule on a tool-approval block
+	MsgGutter      = "▏"  // left rule marking a user/assistant message block (full surface)
 	SubAgent       = "↳"  // sub-agent line marker
 	Cross          = "×"  // error marker
 	Arrow          = "→"  // tool-call / edit / mapping arrow
@@ -95,6 +96,7 @@ func init() { applyGlyphProfile() }
 func applyGlyphProfile() {
 	if RestrictedGlyphs() {
 		PromptGlyph, ApprovalGutter, SubAgent = ">", "|", ">"
+		MsgGutter = "|"
 		Arrow, ShellJob, ScrollKeys = "->", ">", "up/dn"
 		Loop = "~"
 		Goal = "*"
@@ -108,6 +110,7 @@ func applyGlyphProfile() {
 		return
 	}
 	PromptGlyph, ApprovalGutter, SubAgent = "›", "▏", "↳"
+	MsgGutter = "▏"
 	Arrow, ShellJob, ScrollKeys = "→", "▷", "↑↓"
 	Loop = "↻"
 	Goal = "◎"

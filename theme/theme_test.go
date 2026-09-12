@@ -20,7 +20,7 @@ func TestColorsAreSet(t *testing.T) {
 }
 
 func TestGlyphsHaveNoEmoji(t *testing.T) {
-	for _, g := range []string{theme.Sep, theme.PromptGlyph, theme.ApprovalGutter, theme.SubAgent, theme.Cross} {
+	for _, g := range []string{theme.Sep, theme.PromptGlyph, theme.ApprovalGutter, theme.MsgGutter, theme.SubAgent, theme.Cross} {
 		for _, r := range g {
 			if r >= 0x1F000 {
 				t.Errorf("glyph %q contains emoji rune %U", g, r)

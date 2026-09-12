@@ -1,10 +1,14 @@
 // Package full implements render.Presenter for nib's full-screen surface: the
-// alt-screen mode with mouse reporting enabled. It starts as a byte-for-byte
+// alt-screen mode with mouse reporting enabled. It started as a byte-for-byte
 // mirror of tui/render/inline, differing only in Caps() — landing the
 // alt-screen wiring (tea.WithAltScreen/WithMouseCellMotion, suppressing the
 // inline widget's region-clearing escapes) in isolation from the visual
-// redesign this surface's chrome gets in Phase 3 (gutter instead of labels,
-// framed dialogs).
+// redesign this surface's chrome gets in Phase 3. Task 12 is the first cut of
+// that redesign: RoleUser/RoleAssistant now get a coloured gutter instead of
+// inline's word label (see contentPrefix and gutterLines); everything else —
+// Reasoning, Dialog, Header, Footer, and the RoleAgent/RoleTool/RoleError
+// chrome — still mirrors inline exactly, and the conformance suite
+// (tui/render/conformance_test.go) is what proves the divergence stops there.
 package full
 
 import (
@@ -67,17 +71,26 @@ func styledLines(style lipgloss.Style, content string) string {
 }
 
 // contentPrefix returns the chrome this surface puts before a role's content:
-// the label or gutter Message writes on the first line and indents the
-// continuation lines to. Message and ContentWidth both read it, so the width
-// the model pre-renders markdown at can never drift from the width this
-// surface's chrome actually leaves — the model asks (ContentWidth) instead of
+// the gutter or label Message writes, and the width it reserves on every
+// line. Message and ContentWidth both read it, so the width the model
+// pre-renders markdown at can never drift from the width this surface's
+// chrome actually leaves — the model asks (ContentWidth) instead of
 // reconstructing the prefix string itself.
+//
+// RoleUser/RoleAssistant get a one-column coloured gutter (theme.MsgGutter)
+// instead of inline's word label ("you ·"/"nib ·"): this surface owns the
+// whole alt screen, so a colour down the left edge of every line of the block
+// (see gutterLines) identifies the speaker without spending a word on it,
+// where inline's tighter columns keep the word but drop it on a run (Phase 3
+// Task 12). RoleAgent/RoleTool/RoleError are unchanged by this task — their
+// own chrome (the sub-agent marker, the tool body indent, the error cross)
+// stays a label, matching inline.
 func contentPrefix(role render.Role) string {
 	switch role {
 	case render.RoleUser:
-		return theme.LabelYou.Render(theme.LabelYouText) + " " + theme.SepStyle.Render(theme.Sep) + " "
+		return theme.LabelYou.Render(theme.MsgGutter) + " "
 	case render.RoleAssistant:
-		return theme.LabelNib.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep) + " "
+		return theme.Gutter.Render(theme.MsgGutter) + " "
 	case render.RoleAgent:
 		return theme.Subtle.Render(theme.SubAgent) + " "
 	case render.RoleTool:
@@ -87,6 +100,28 @@ func contentPrefix(role render.Role) string {
 		return theme.Error.Render(theme.Cross) + " "
 	}
 	return ""
+}
+
+// gutterLines lays out a block with the gutter prefix repeated on every
+// non-blank line, rather than only on the first line the way prefixed's label
+// layout does — a gutter's whole point is to mark the block as it scrolls by,
+// not to head it once. A blank line inside the content (a markdown paragraph
+// break) is left bare: painting the bar across it would read as the message
+// continuing through the gap rather than pausing for one, and would silently
+// merge what must stay two visually separate paragraphs (and, cross-surface,
+// two separate blocks — see TestMessageStructuralEquivalence's "multiline
+// content" case, which requires both presenters to agree on block count).
+func gutterLines(prefix, content string) string {
+	var b strings.Builder
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			b.WriteString(prefix)
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // ContentWidth reports how many cells are left for a role's content once this
@@ -118,22 +153,23 @@ func (presenter) ContentWidth(role render.Role, w int) int {
 // computes HugNext and carries it on the value rather than Message re-deriving
 // it from prev/Role.
 //
-// prev is accepted (not just for signature symmetry with the Presenter
-// interface) so a different Presenter can vary spacing across role
-// transitions; this implementation's spacing rule never depended on the
-// previous role — it was always "blank after every message, except a hugging
-// agent line" — so branching on prev here would be new behaviour, which a
-// mirror of inline must not introduce.
+// prev is accepted for signature symmetry with the Presenter interface, but
+// this surface's chrome never reads it: the gutter (see contentPrefix) marks
+// every message regardless of what rendered before it, since a one-column
+// colour bar costs nothing to repeat the way a word label does — inline is
+// the surface with columns tight enough to make that trade (Phase 3 Task 12).
+// The trailing-separator rule likewise never depended on the previous role —
+// it was always "blank after every message, except a hugging agent line".
 func (presenter) Message(m render.Message, prev render.Role, w int) string {
 	var body string
 	switch m.Role {
 	case render.RoleUser:
 		prefix := contentPrefix(render.RoleUser)
 		wrapped := render.Wrap(m.Content, w-lipgloss.Width(prefix))
-		body = prefixed(prefix, wrapped)
+		body = gutterLines(prefix, wrapped)
 
 	case render.RoleAssistant:
-		body = prefixed(contentPrefix(render.RoleAssistant), m.Content)
+		body = gutterLines(contentPrefix(render.RoleAssistant), m.Content)
 
 	case render.RoleAgent:
 		body = prefixed(contentPrefix(render.RoleAgent), styledLines(theme.Subtle, m.Content))

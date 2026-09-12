@@ -253,9 +253,32 @@ func TestMessageStructuralEquivalence(t *testing.T) {
 			wraps:   true,
 		},
 		{
+			// Phase 3 Task 12: inline drops the "you ·" label on a consecutive
+			// same-role message (relying on the blank-line separator instead) and
+			// full always shows its gutter regardless of prev — a deliberate
+			// CHROME divergence. This case proves it stops there: content,
+			// blocks, and the trailing separator must still agree across
+			// surfaces even though the two would render visibly different bytes.
+			name:    "consecutive user messages",
+			msg:     render.Message{Role: render.RoleUser, Content: "third turn"},
+			prev:    render.RoleUser,
+			tokens:  []string{"third turn"},
+			wantSep: true,
+			wraps:   true,
+		},
+		{
 			name:    "assistant",
 			msg:     render.Message{Role: render.RoleAssistant, Content: "assistant answer"},
 			tokens:  []string{"assistant answer"},
+			wantSep: true,
+		},
+		{
+			// Same rule as "consecutive user messages" above, for the other role
+			// Task 12 touches.
+			name:    "consecutive assistant messages",
+			msg:     render.Message{Role: render.RoleAssistant, Content: "second answer"},
+			prev:    render.RoleAssistant,
+			tokens:  []string{"second answer"},
 			wantSep: true,
 		},
 		{
@@ -684,14 +707,30 @@ func TestContentWidthLeavesRoomForChrome(t *testing.T) {
 // once the presenter has added its own chrome. This is the property the model
 // relies on when it pre-renders markdown (I2) instead of reconstructing one
 // surface's prefix for both.
+//
+// prev is varied for RoleUser/RoleAssistant because Phase 3 Task 12 made
+// inline's prefix shape depend on it (the label on the first message of a
+// run, an all-spaces prefix of the SAME width on a consecutive one) while
+// ContentWidth stays role-only (see its doc — it cannot see prev at all).
+// That is only a safe design if both prefix shapes are really the same
+// width; this loop is what would catch it if they ever drifted apart — a
+// content string sized to ContentWidth(role, w) would then overflow w under
+// whichever prefix ContentWidth did NOT measure.
 func TestContentWidthMatchesRenderedPrefix(t *testing.T) {
 	const w = 48
 	for name, p := range presenters() {
 		for _, role := range []render.Role{render.RoleUser, render.RoleAssistant, render.RoleAgent, render.RoleError} {
 			cw := p.ContentWidth(role, w)
 			content := strings.Repeat("x", cw)
-			out := p.Message(render.Message{Role: role, Content: content, Label: "label"}, render.RoleNone, w)
-			assertFitsWidth(t, name+"/"+string(role), out, w)
+
+			prevs := []render.Role{render.RoleNone}
+			if role == render.RoleUser || role == render.RoleAssistant {
+				prevs = append(prevs, role)
+			}
+			for _, prev := range prevs {
+				out := p.Message(render.Message{Role: role, Content: content, Label: "label"}, prev, w)
+				assertFitsWidth(t, name+"/"+string(role)+"/prev="+string(prev), out, w)
+			}
 		}
 	}
 }

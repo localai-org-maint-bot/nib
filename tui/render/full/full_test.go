@@ -8,6 +8,11 @@ import (
 	"github.com/mudler/nib/tui/render"
 )
 
+// TestMessageRendersRolePrefixes pins each role's chrome. RoleUser/
+// RoleAssistant were both a word label before Phase 3 Task 12 ("you"/
+// theme.BrandName); this surface now marks them with theme.MsgGutter instead
+// (see TestFullUsesGutterNotLabels for the negative half — that the label is
+// gone). RoleError is untouched by that task, so it keeps its label check.
 func TestMessageRendersRolePrefixes(t *testing.T) {
 	p := New()
 	cases := []struct {
@@ -15,8 +20,8 @@ func TestMessageRendersRolePrefixes(t *testing.T) {
 		msg  render.Message
 		want string
 	}{
-		{"user", render.Message{Role: render.RoleUser, Content: "hi"}, "you"},
-		{"assistant", render.Message{Role: render.RoleAssistant, Content: "hi"}, theme.BrandName},
+		{"user", render.Message{Role: render.RoleUser, Content: "hi"}, theme.MsgGutter},
+		{"assistant", render.Message{Role: render.RoleAssistant, Content: "hi"}, theme.MsgGutter},
 		{"error", render.Message{Role: render.RoleError, Content: "boom"}, theme.Cross},
 	}
 	for _, c := range cases {
@@ -29,7 +34,25 @@ func TestMessageRendersRolePrefixes(t *testing.T) {
 	}
 }
 
-func TestContinuationLinesAreIndentedToPrefixWidth(t *testing.T) {
+// TestFullUsesGutterNotLabels: the full-screen surface has room for a colored
+// gutter, which identifies the speaker without spending a word on it.
+func TestFullUsesGutterNotLabels(t *testing.T) {
+	p := New()
+	out := p.Message(render.Message{Role: render.RoleUser, Content: "hello"}, render.RoleNone, 80)
+	if strings.Contains(out, "you") {
+		t.Error("the full-screen presenter should not print a 'you' label")
+	}
+	if !strings.Contains(out, theme.MsgGutter) {
+		t.Errorf("expected the gutter glyph %q in %q", theme.MsgGutter, out)
+	}
+}
+
+// TestContinuationLinesCarryTheGutter pins the shape that replaced
+// prefix-then-spaces-indent for RoleUser/RoleAssistant: unlike inline (which
+// indents continuation lines to the label's width with blank spaces), this
+// surface's gutter is a colour bar that must mark EVERY line of the block, or
+// wrapped content past the first line would read as unattributed.
+func TestContinuationLinesCarryTheGutter(t *testing.T) {
 	p := New()
 	out := p.Message(render.Message{
 		Role:    render.RoleUser,
@@ -40,8 +63,8 @@ func TestContinuationLinesAreIndentedToPrefixWidth(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("expected wrapped output, got %d line(s)", len(lines))
 	}
-	if !strings.HasPrefix(lines[1], "      ") {
-		t.Errorf("continuation line not indented to the prefix width: %q", lines[1])
+	if !strings.Contains(lines[1], theme.MsgGutter) {
+		t.Errorf("continuation line does not carry the gutter: %q", lines[1])
 	}
 }
 
