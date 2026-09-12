@@ -9,6 +9,11 @@ const (
 	HelpApprovalEdit = "enter submit · esc cancel"
 	ApproveEditHint  = "describe the change · enter submit · esc cancel"
 
+	// NewOutputText is the footer marker shown when the viewport is scrolled up
+	// and content has arrived below the fold. Composed with NewOutputGlyph by
+	// NewOutputMarker() in theme.go — the glyph is swappable, this text isn't.
+	NewOutputText = "new output"
+
 	// The numbered approval menu. Line 2 is dynamic — the TUI composes
 	// ApproveAlwaysPrefix + chat.GrantScope(...) + ApproveAlwaysSuffix.
 	ApproveOnce         = "[1] run it once"

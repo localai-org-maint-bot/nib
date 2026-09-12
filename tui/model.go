@@ -1891,12 +1891,14 @@ func (m Model) View() string {
 	sb.WriteString("\n")
 
 	// Body: log viewer, first-run empty state, otherwise the conversation viewport.
+	showingViewport := false
 	if m.showLogs {
 		sb.WriteString(m.renderLogsViewer())
 	} else if len(m.messages) == 0 && !m.loading && !m.awaitingApproval && !m.awaitingAsk {
 		sb.WriteString(renderEmptyState(m.width))
 	} else {
 		sb.WriteString(m.viewport.View())
+		showingViewport = true
 	}
 	sb.WriteString("\n")
 
@@ -1927,6 +1929,12 @@ func (m Model) View() string {
 		sb.WriteString(m.textarea.View())
 	}
 	sb.WriteString("\n")
+	// Scroll-position signal: content arrived below the fold while the user was
+	// reading history. Without it the preserve-scroll behaviour is silent.
+	if showingViewport && !m.viewport.AtBottom() {
+		sb.WriteString(theme.NewOutputMarker())
+		sb.WriteString("\n")
+	}
 	help := theme.Help.Render(m.helpLine())
 	if badge := m.footerBadges(lipgloss.Width(help)); badge != "" {
 		gap := m.width - lipgloss.Width(help) - lipgloss.Width(badge)

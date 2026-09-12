@@ -37,6 +37,7 @@ var (
 	ShellJob       = "▷"  // shell-jobs footer marker
 	ScrollKeys     = "↑↓" // up/down navigation hint
 	ReasoningGlyph = "✻"  // marks a block of model thinking/reasoning
+	NewOutputGlyph = "↓"  // footer marker: new content arrived while scrolled up
 )
 
 // spinnerFrames animates the working indicator. Braille cells read as a smooth
@@ -84,6 +85,7 @@ func applyGlyphProfile() {
 		Loop = "~"
 		Goal = "*"
 		ReasoningGlyph = "*"
+		NewOutputGlyph = "v"
 		return
 	}
 	PromptGlyph, ApprovalGutter, SubAgent = "›", "▏", "↳"
@@ -91,6 +93,7 @@ func applyGlyphProfile() {
 	Loop = "↻"
 	Goal = "◎"
 	ReasoningGlyph = "✻"
+	NewOutputGlyph = "↓"
 }
 
 // Styles. Bold is reserved for the brand mark and the active approval keys.
@@ -122,4 +125,12 @@ var (
 // The body beneath is rendered with the Reasoning style by the caller.
 func ReasoningHeader() string {
 	return Gutter.Render(ReasoningGlyph) + " " + Help.Render("reasoning")
+}
+
+// NewOutputMarker renders the dim footer marker shown when the user is
+// scrolled up in the transcript and content has arrived below the fold — the
+// swappable NewOutputGlyph (↓ / v in restricted mode) plus NewOutputText, both
+// in the same dim Help style as the rest of the footer.
+func NewOutputMarker() string {
+	return Help.Render(NewOutputGlyph + " " + NewOutputText)
 }
