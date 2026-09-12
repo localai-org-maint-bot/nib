@@ -146,6 +146,15 @@ const (
 	// failed bash/bash_job_output call whose stdout and stderr were both
 	// empty — a %d format string for the exit code.
 	ToolResultNoOutput = "(exit %d, no output)"
+
+	// UsageEstimatedPrefix marks the session usage badge (tui/model.go's
+	// usageBadge) when its figure is chat.Session.EstimatedUsage's byte/4
+	// guess rather than measured spend — the same "~" convention prunedNotice
+	// and compactNotice already use for their own estimates. Kept to a single
+	// ASCII character on purpose: footerBadges drops the whole usage badge
+	// when the footer is tight, so a longer marker only makes it disappear
+	// sooner.
+	UsageEstimatedPrefix = "~"
 )
 
 // ReasoningMaxLines is how many trailing lines a collapsed reasoning box

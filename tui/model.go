@@ -2571,13 +2571,36 @@ func (m Model) contextBadge() string {
 // so a zero one has to render "0" rather than the empty string HumanTokens
 // returns, or the badge shows "session 1.2k in /  out". The exit summary prints
 // the same fixed shape and shares the same formatter.
+//
+// When both counts are <= 0 AND a session is attached, this falls back to
+// chat.Session.EstimatedUsage — the byte/4 conversation estimate — rather than
+// hiding the badge outright. That fallback exists for a streamed session:
+// cogito's bundled clients never populate StreamEvent.Usage, so Usage() stays
+// zero for every streamed turn (chat/usage.go's doc comment), and without this
+// the badge would simply vanish the moment streaming turns on. The estimate is
+// marked with theme.UsageEstimatedPrefix so it never reads as measured spend —
+// real usage.json and the exit summary still carry the true (possibly zero)
+// figure; only this footer badge borrows the estimate for display.
 func (m Model) usageBadge() string {
 	in, out := m.sessionUsage.PromptTokens, m.sessionUsage.CompletionTokens
+	estimated := false
 	if in <= 0 && out <= 0 {
-		return ""
+		if m.session == nil {
+			return ""
+		}
+		est := m.session.EstimatedUsage()
+		in, out = est.PromptTokens, est.CompletionTokens
+		if in <= 0 && out <= 0 {
+			return ""
+		}
+		estimated = true
 	}
-	return theme.Meta.Render(fmt.Sprintf("session %s in / %s out",
-		chat.HumanTokensOrZero(in), chat.HumanTokensOrZero(out)))
+	label := fmt.Sprintf("session %s in / %s out",
+		chat.HumanTokensOrZero(in), chat.HumanTokensOrZero(out))
+	if estimated {
+		label = theme.UsageEstimatedPrefix + label
+	}
+	return theme.Meta.Render(label)
 }
 
 // footerBadges renders the right-aligned bottom-bar badges for a help line of
