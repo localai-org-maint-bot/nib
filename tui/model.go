@@ -2242,7 +2242,7 @@ func (m *Model) updateViewport() {
 			// prevRole for it above — but a following Message call still needs
 			// an accurate "what rendered last" answer (Phase 3 Task 12 reads
 			// prev to drop labels on consecutive same-role messages). RoleAgent
-			// is the same fit roleOf uses for these raw roles.
+			// is the closest fit for these raw agent_tool/agent_result roles.
 			prevRole = render.RoleAgent
 			continue
 		}
