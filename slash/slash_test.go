@@ -180,3 +180,24 @@ func TestResolveYoloInvalid(t *testing.T) {
 		t.Fatalf("Kind = %v, want KindError", got.Kind)
 	}
 }
+
+func TestResolveResume(t *testing.T) {
+	cases := []struct {
+		in      string
+		wantAll bool
+		wantID  string
+	}{
+		{"/resume", false, ""},
+		{"/resume --all", true, ""},
+		{"/resume abc123", false, "abc123"},
+	}
+	for _, c := range cases {
+		got := Resolve(c.in, nil, nil, nil)
+		if got.Kind != KindResume {
+			t.Fatalf("%q: Kind = %v, want KindResume", c.in, got.Kind)
+		}
+		if got.ResumeAll != c.wantAll || got.ResumeID != c.wantID {
+			t.Errorf("%q: all=%v id=%q, want all=%v id=%q", c.in, got.ResumeAll, got.ResumeID, c.wantAll, c.wantID)
+		}
+	}
+}

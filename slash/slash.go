@@ -32,6 +32,7 @@ const (
 	KindModelList             // list available models
 	KindModelSet              // switch the session model to Model
 	KindYolo                  // toggle (or explicitly set) session-wide auto-approval
+	KindResume                // resume a recorded session (ResumeID) or open the picker
 )
 
 // AttachOp enumerates the /attach sub-operations.
@@ -51,6 +52,10 @@ type Action struct {
 	Err    string // for KindError
 	Model  string // for KindModelSet: the model to switch to
 	YoloOn *bool  // for KindYolo: nil = toggle, non-nil = set explicitly (on/off)
+
+	// Resume actions:
+	ResumeAll bool   // KindResume: widen the picker to sessions from any cwd
+	ResumeID  string // KindResume: non-empty loads this session directly, skipping the picker
 
 	// Loop actions:
 	Interval time.Duration // KindLoopStart: 0 = self-paced
@@ -139,6 +144,8 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 		}
 	case "goal":
 		return resolveGoal(rest)
+	case "resume":
+		return resolveResume(rest)
 	case "attach":
 		rest = strings.TrimSpace(rest)
 		switch {
@@ -216,6 +223,28 @@ func resolveGoal(rest string) Action {
 		return Action{Kind: KindGoalClear}
 	}
 	return Action{Kind: KindGoalSet, Text: rest}
+}
+
+// resolveResume maps the /resume subcommands: "/resume" opens the picker
+// (cwd-scoped), "/resume --all" opens it widened to every recorded session,
+// and "/resume <id>" (optionally combined with --all, though an explicit id
+// never needs the widened list to find it) loads that session directly. The
+// two tokens are independent flags rather than positional args, so either
+// order ("/resume --all abc123" or "/resume abc123 --all") resolves the
+// same way.
+func resolveResume(rest string) Action {
+	all := false
+	id := ""
+	for _, tok := range strings.Fields(rest) {
+		if tok == "--all" {
+			all = true
+			continue
+		}
+		if id == "" {
+			id = tok
+		}
+	}
+	return Action{Kind: KindResume, ResumeAll: all, ResumeID: id}
 }
 
 // parseAtPaths splits a send line into literal text and @path attachments. A
