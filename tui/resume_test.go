@@ -125,6 +125,90 @@ func TestStartResumeWithIDLoadsDirectly(t *testing.T) {
 	}
 }
 
+// TestResumeRestoresTheVisibleTranscript is the I4 regression: applyResume
+// seeded cfg.InitialHistory (what the MODEL sees) and appended a "restored N
+// messages" notice, but never repopulated m.messages (what the USER sees). A
+// resumed session landed on an empty screen claiming it had restored a
+// conversation that was nowhere on it.
+func TestResumeRestoresTheVisibleTranscript(t *testing.T) {
+	dir := t.TempDir()
+	store := chat.NewSessionStore(dir)
+	mustSaveTUI(t, store, chat.SessionRecord{
+		ID: "direct", Title: "remembered", Cwd: "/anywhere",
+		Messages: []openai.ChatCompletionMessage{
+			{Role: "system", Content: "you are a helpful agent"},
+			{Role: "user", Content: "remember 41"},
+			{Role: "assistant", Content: "noted: 41"},
+			{Role: "assistant", ToolCalls: []openai.ToolCall{{
+				Function: openai.FunctionCall{Name: "bash", Arguments: `{"command":"ls -la"}`},
+			}}},
+			{Role: "tool", Content: "total 0"},
+			{Role: "user", Content: "what was it?"},
+		},
+	})
+
+	m := newTestModel(Model{
+		store: store, ctx: context.Background(),
+		textarea: textarea.New(), viewport: viewport.New(80, 20),
+		width: 80, height: 24,
+	})
+	m.startResume(false, "direct")
+
+	// What the user sees, not just what the model was handed.
+	var roles []string
+	for _, msg := range m.messages {
+		roles = append(roles, msg.Role)
+	}
+	want := []string{"user", "assistant", "tool", "user", "agent"} // + the restored notice
+	if len(roles) != len(want) {
+		t.Fatalf("restored transcript roles = %v, want %v", roles, want)
+	}
+	for i := range want {
+		if roles[i] != want[i] {
+			t.Fatalf("restored transcript roles = %v, want %v", roles, want)
+		}
+	}
+	if m.messages[0].Content != "remember 41" || m.messages[1].Content != "noted: 41" {
+		t.Errorf("restored transcript lost its content: %+v", m.messages[:2])
+	}
+	if m.messages[2].Name != "bash" {
+		t.Errorf("restored tool call lost its name: %+v", m.messages[2])
+	}
+
+	// And it reaches the screen, not just the slice.
+	m.updateViewport()
+	out := m.viewport.View()
+	for _, want := range []string{"remember 41", "noted: 41", "what was it?"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("restored transcript is not on screen: %q missing from %q", want, out)
+		}
+	}
+}
+
+// TestResumeReplacesAnyEarlierTranscript: picking a session mid-conversation
+// shows that session, not this one with the other one's messages tacked on.
+func TestResumeReplacesAnyEarlierTranscript(t *testing.T) {
+	dir := t.TempDir()
+	store := chat.NewSessionStore(dir)
+	mustSaveTUI(t, store, chat.SessionRecord{
+		ID: "direct", Cwd: "/anywhere",
+		Messages: []openai.ChatCompletionMessage{{Role: "user", Content: "the stored one"}},
+	})
+
+	m := newTestModel(Model{
+		store: store, ctx: context.Background(),
+		textarea: textarea.New(), viewport: viewport.New(80, 20),
+	})
+	m = withMessages(m, ChatMessage{Role: "user", Content: "the live one"})
+	m.startResume(false, "direct")
+
+	for _, msg := range m.messages {
+		if strings.Contains(msg.Content, "the live one") {
+			t.Fatalf("the pre-resume transcript survived into the restored one: %+v", m.messages)
+		}
+	}
+}
+
 func TestStartResumeWithBadIDReportsError(t *testing.T) {
 	m := newTestModel(Model{store: chat.NewSessionStore(t.TempDir()), textarea: textarea.New(), viewport: viewport.New(80, 20)})
 	cmd := m.startResume(false, "nope")

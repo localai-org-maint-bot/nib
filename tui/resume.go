@@ -155,12 +155,55 @@ func (m *Model) startResume(all bool, id string) tea.Cmd {
 	return nil
 }
 
+// restoredTranscript maps a stored session's openai history onto the visible
+// ChatMessage transcript — the projection /resume rebuilds the screen from.
+// It is deliberately not a one-to-one copy of the wire history:
+//
+//   - system messages are the prompt scaffolding, never shown live, so they
+//     are not shown on a resume either.
+//   - an assistant message carries prose, tool calls, or both. The prose
+//     becomes an assistant entry; each tool call becomes a tool entry with the
+//     name and arguments the live path passes to toolLabel, so a restored
+//     transcript shows the same one-line call summaries it showed the first
+//     time round.
+//   - tool-result messages are skipped: live, the result is rendered as the
+//     preview attached to its call, and re-showing the raw payload of every
+//     historical call would bury the conversation it belongs to.
+//
+// Roles that arrive empty (an assistant turn that was only tool calls) add no
+// entry at all rather than an empty bubble.
+func restoredTranscript(hist []openai.ChatCompletionMessage) []ChatMessage {
+	var out []ChatMessage
+	for _, msg := range hist {
+		switch msg.Role {
+		case openai.ChatMessageRoleUser:
+			if strings.TrimSpace(msg.Content) != "" {
+				out = append(out, ChatMessage{Role: "user", Content: msg.Content})
+			}
+		case openai.ChatMessageRoleAssistant:
+			if strings.TrimSpace(msg.Content) != "" {
+				out = append(out, ChatMessage{Role: "assistant", Content: msg.Content})
+			}
+			for _, call := range msg.ToolCalls {
+				out = append(out, ChatMessage{
+					Role:      "tool",
+					Name:      call.Function.Name,
+					Arguments: call.Function.Arguments,
+				})
+			}
+		}
+	}
+	return out
+}
+
 // applyResume seeds cfg.InitialHistory from rec and re-runs initSession() —
 // the exact path a fresh launch takes (Init calls it too) — so a resumed
 // conversation goes through the SAME sessionReadyMsg plumbing (durable-loop
 // reload, listener wiring) instead of a second, drifting copy of it. It also
 // adopts rec's id/title/created stamp, so the NEXT autosave (recordSession)
-// updates this same stored session file instead of forking a new one.
+// updates this same stored session file instead of forking a new one, and
+// rebuilds the on-screen transcript from the same record (restoredTranscript)
+// so the user gets back the conversation the model is getting back.
 //
 // Pointer receiver: both call sites (dispatchResolved's direct-id case,
 // resolveResumePick's picker case) already hold an addressable Model they
@@ -174,6 +217,12 @@ func (m *Model) applyResume(rec chat.SessionRecord) tea.Cmd {
 	m.sessionTitle = rec.Title
 	m.sessionCreated = rec.Created
 	m.sessionReady = false
+	// Rebuild what the USER sees from the same record the MODEL is being
+	// seeded with. Without this the screen stayed empty (or, worse, kept the
+	// transcript of the conversation being replaced) under a notice claiming
+	// N messages had been restored — N messages only the model could see.
+	m.messages = nil
+	m.appendMessage(restoredTranscript(rec.Messages)...)
 	m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf(theme.ResumeRestored, len(rec.Messages))})
 	m.status = theme.Starting
 	m.updateViewportFollow()
