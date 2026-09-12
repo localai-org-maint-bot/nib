@@ -751,14 +751,41 @@ func TestFooterStructuralEquivalence(t *testing.T) {
 // FooterHeight from the frame to size the viewport, so an answer that disagrees
 // with Footer by even one row makes an over-tall frame — which on the alt
 // screen scrolls the header off the top every time a job row appears.
+//
+// The expectation is counted off the FIXTURE, not measured from Footer: the
+// help line, plus a row for the new-output marker, plus a row for the error
+// line, plus one per job-status row. It used to be
+// lipgloss.Height(p.Footer(...)), which is character for character the body of
+// both FooterHeight implementations — a tautology that could not fail for any
+// change to either footer, including one that dropped a row entirely. Deriving
+// it here means the fixture, not the implementation, says how tall a footer of
+// this shape is; a presenter that starts wrapping its help line or stacking
+// badges onto a second row has to come and update this count, which is exactly
+// the conversation the layout budget needs to have.
 func TestFooterHeightMatchesFooter(t *testing.T) {
+	// w = 20 is deliberately narrow, but every fixture's help/badges/error
+	// text is short enough that no presenter wraps it there, so the row count
+	// below holds at both widths.
 	for _, w := range []int{20, 60} {
 		for _, tc := range footerStates() {
+			want := 1 // the help/badges line, always present
+			if tc.state.NewOutput {
+				want++
+			}
+			if tc.state.Err != "" {
+				want++
+			}
+			want += len(tc.state.Footers)
+
 			for name, p := range presenters() {
-				got := p.FooterHeight(tc.state, w)
-				want := lipgloss.Height(p.Footer(tc.state, w))
-				if got != want {
-					t.Errorf("%s FooterHeight(%s, w=%d) = %d, but Footer emits %d rows: %q",
+				if got := p.FooterHeight(tc.state, w); got != want {
+					t.Errorf("%s FooterHeight(%s, w=%d) = %d, want %d rows: %q",
+						name, tc.name, w, got, want, p.Footer(tc.state, w))
+				}
+				// And Footer itself must actually emit that many, or the
+				// budget is right about the wrong string.
+				if got := lipgloss.Height(p.Footer(tc.state, w)); got != want {
+					t.Errorf("%s Footer(%s, w=%d) emits %d rows, want %d: %q",
 						name, tc.name, w, got, want, p.Footer(tc.state, w))
 				}
 			}
