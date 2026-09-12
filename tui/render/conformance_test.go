@@ -661,6 +661,72 @@ func TestContentWidthMatchesRenderedPrefix(t *testing.T) {
 	}
 }
 
+// TestFrameContainsEveryPiece is Task 10a's composition-point guard: every
+// block a frame is made of — the header's brand/cwd, the body (the rendered
+// transcript viewport, standing in here for whatever Messages/Reasoning/
+// Dialogs produced it), the composer, and the footer's help/badges/error/job
+// rows — must survive into Frame's output on both surfaces, and the composed
+// frame must never exceed the (w, h) budget it was given. This is what closes
+// the review finding that no Presenter method received a height and no method
+// could see body/composer/footer/chrome all at once.
+func TestFrameContainsEveryPiece(t *testing.T) {
+	const w, h = 60, 40
+	v := render.ViewState{
+		Width: w, Height: h,
+		Brand: "nib", Cwd: "~/src/project",
+		Help: "tab complete", Badges: "12k ctx", Err: "something failed",
+		Footers: []render.FooterRow{{Glyph: "*", Text: "1 job running", Kind: render.FooterJobs}},
+	}
+	body := "BODY-MARKER-ONE\nBODY-MARKER-TWO"
+	composer := "COMPOSER-MARKER"
+
+	for name, p := range presenters() {
+		t.Run(name, func(t *testing.T) {
+			header := p.Header(v)
+			footer := p.Footer(v, w)
+			out := p.Frame(v, header, body, composer, footer, w, h)
+
+			tokens := []string{
+				"nib", "~/src/project", // header
+				"BODY-MARKER-ONE", "BODY-MARKER-TWO", // body
+				"COMPOSER-MARKER",                                              // composer
+				"tab complete", "12k ctx", "something failed", "1 job running", // footer
+			}
+			assertPreserves(t, name, out, tokens)
+
+			if !strings.Contains(out, composer) {
+				t.Errorf("%s Frame dropped the composer entirely: %q", name, out)
+			}
+			if got := lipgloss.Height(out); got > h {
+				t.Errorf("%s Frame is %d rows tall, budget was %d", name, got, h)
+			}
+		})
+	}
+}
+
+// TestFrameStructuralEquivalence: both surfaces must agree on how the four
+// pieces relate to each other structurally (how many blocks, in what order),
+// even though Task 10a deliberately keeps both stacking rather than framing —
+// the point of this task is that the restructuring is behaviour-preserving on
+// both surfaces, provably so via the same fingerprint comparison the rest of
+// this suite uses.
+func TestFrameStructuralEquivalence(t *testing.T) {
+	const w, h = 60, 40
+	v := render.ViewState{Width: w, Height: h, Brand: "nib", Cwd: "~/src/project", Help: "tab complete"}
+	body := "BODY-MARKER"
+	composer := "COMPOSER-MARKER"
+	tokens := []string{"nib", "~/src/project", "BODY-MARKER", "COMPOSER-MARKER", "tab complete"}
+
+	fps := map[string]fingerprint{}
+	for name, p := range presenters() {
+		header := p.Header(v)
+		footer := p.Footer(v, w)
+		out := p.Frame(v, header, body, composer, footer, w, h)
+		fps[name] = fingerprintOf(out, tokens)
+	}
+	assertSameFingerprint(t, fps)
+}
+
 // NOTE: selection-marking conformance is deliberately NOT asserted here.
 // At this task `Dialog` is the legacy ask block moved verbatim — static text
 // that ignores `Selected`. Selection rendering arrives in Phase 3 Task 11, and

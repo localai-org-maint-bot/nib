@@ -32,6 +32,48 @@ type Caps struct {
 // error line, four job-status rows). A fixed guess makes an over-tall frame,
 // which on the alt screen scrolls the header off the top. It must agree with
 // Footer exactly, for the same ViewState and width.
+//
+// Frame is the whole-screen composition point (Phase 3 Task 10a). Before it
+// existed, the core drove Header/Footer around the viewport and
+// Message/Reasoning/Dialog INTO the viewport's scrollback — two call sites
+// that never met, and neither received a height. That made a full-screen
+// layout impossible to express: a presenter that owns the whole screen
+// (alt-screen `full`) has no way to place a dialog as a real overlay rather
+// than transcript content that scrolls away with history, and no way to know
+// how tall the screen even is.
+//
+// Frame takes header, body, composer and footer already rendered — the core
+// still calls Header/Message/Reasoning/Dialog/Footer to build them, exactly
+// as before — because two of them are needed earlier than Frame can run:
+// body's own content depends on the viewport's width and height, which the
+// core must budget (from the footer's height) before it can lay out a single
+// line of transcript, and footer is that same budget's input. Passing footer
+// through as an already-rendered string (rather than Frame calling
+// Footer(v, w) itself) is what lets the core measure it once per frame and
+// reuse the string for the frame's own footer row, rather than rendering it
+// twice (Task 10a's third carried defect). composer bundles whatever sits
+// between the body and the footer this frame — the `/` completion popup, the
+// queued-message block, the textarea, in whatever combination is present —
+// since none of those has a Presenter method of its own (they are tui-side
+// concerns: completion state, queue state, textarea state) and Frame does not
+// need to distinguish them to place them.
+//
+// v is carried alongside the four strings (rather than Frame taking only
+// them) for what it carries that isn't captured in any one piece: v.Dialogs,
+// so a surface that owns the whole screen can place a dialog as a real
+// overlay on top of body instead of it being baked into body as scrollback
+// content. That is not exercised yet — in this task both presenters still
+// stack, and Dialog output still reaches body the same way it always has, via
+// the core's existing per-message rendering loop — but the shape has to admit
+// it now, since three later features (a collapsible reasoning panel, a
+// selectable ask_user dialog, a /resume picker) all need to place a panel or
+// overlay Frame is the only method with the (w, h) budget and the composed
+// pieces to place it against.
+//
+// A presenter that stacks (inline, and full for now) concatenates the four
+// pieces in the order they always rendered in. A presenter that owns the
+// screen may frame body in a box sized to (w, h) and place a dialog over it
+// once there is a dialog worth overlaying.
 type Presenter interface {
 	Caps() Caps
 	Header(v ViewState) string
@@ -41,4 +83,5 @@ type Presenter interface {
 	Dialog(d Dialog, w int) string
 	Footer(v ViewState, w int) string
 	FooterHeight(v ViewState, w int) int
+	Frame(v ViewState, header, body, composer, footer string, w, h int) string
 }

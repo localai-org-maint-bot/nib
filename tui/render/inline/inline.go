@@ -341,3 +341,22 @@ func (p presenter) Footer(v render.ViewState, w int) string {
 func (p presenter) FooterHeight(v render.ViewState, w int) int {
 	return lipgloss.Height(p.Footer(v, w))
 }
+
+// Frame composes the whole screen from its four already-rendered pieces. The
+// inline widget lives in the normal scrollback, not the alt screen, so it has
+// no screen of its own to lay these out on — it simply stacks them in the
+// order they always rendered in: header, body, a blank line, the composer
+// (completion popup / queue / textarea, whichever are present), a blank line,
+// footer. w and h are unused here; this surface never had a frame to budget
+// against before Task 10a, and does not gain one now — see full.Frame for the
+// surface that does.
+func (presenter) Frame(v render.ViewState, header, body, composer, footer string, w, h int) string {
+	var b strings.Builder
+	b.WriteString(header)
+	b.WriteString(body)
+	b.WriteString("\n")
+	b.WriteString(composer)
+	b.WriteString("\n")
+	b.WriteString(footer)
+	return b.String()
+}

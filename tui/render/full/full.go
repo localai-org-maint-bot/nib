@@ -343,3 +343,26 @@ func (p presenter) Footer(v render.ViewState, w int) string {
 func (p presenter) FooterHeight(v render.ViewState, w int) int {
 	return lipgloss.Height(p.Footer(v, w))
 }
+
+// Frame composes the whole screen from its four already-rendered pieces:
+// header, body, composer (completion popup / queue / textarea, whichever are
+// present) and footer, stacked in that order with a blank line around the
+// composer — exactly the order the core used to concatenate them in before
+// this method existed. This surface owns the whole alt screen and receives
+// (w, h) precisely so a later task can frame body in a box sized to them and
+// place a dialog from v.Dialogs as a real overlay on top of it instead of
+// scrollback content that scrolls away with history. Neither is exercised
+// yet: Task 10a's job is only to prove this surface can still produce
+// byte-for-byte the same stacked frame inline does through the new
+// composition point, so a dialog placed here has somewhere to land once Task
+// 11 gives it one worth placing.
+func (presenter) Frame(v render.ViewState, header, body, composer, footer string, w, h int) string {
+	var b strings.Builder
+	b.WriteString(header)
+	b.WriteString(body)
+	b.WriteString("\n")
+	b.WriteString(composer)
+	b.WriteString("\n")
+	b.WriteString(footer)
+	return b.String()
+}
