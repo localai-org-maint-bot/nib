@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -34,11 +33,67 @@ func mouseTestModel() Model {
 
 // boxRow returns the terminal-relative Y that lands on the model's own
 // recorded reasoning-box span (its first row), deriving the chrome height
-// from Presenter.Header — the same source View composes from — rather than a
-// hardcoded layout constant.
+// from Presenter.HeaderHeight — the same query View's layout budget and
+// reasoningBoxHit both use — rather than a hardcoded layout constant.
+//
+// It is the exact inverse of the mapping reasoningBoxHit applies, so on its
+// own it proves only that the two are inverses: a wrong coordinate mapping
+// cancels out and the click still "lands". What it cannot cancel out is WHERE
+// the span ends, which is why TestReasoningBoxHitBoundaries drives the rows
+// either side of the span through the same helper — those depend on the span's
+// real height, not just on the offset.
 func (m Model) boxRow() int {
-	chrome := strings.Count(m.presenter.Header(m.viewState()), "\n")
-	return m.reasoningSpanStart + chrome - m.viewport.YOffset
+	return m.reasoningSpanStart + m.presenter.HeaderHeight(m.viewState()) - m.viewport.YOffset
+}
+
+// rowFor maps a content-relative viewport row to its terminal-relative Y, the
+// same translation boxRow does for the span's first row.
+func (m Model) rowFor(contentRow int) int {
+	return contentRow + m.presenter.HeaderHeight(m.viewState()) - m.viewport.YOffset
+}
+
+// TestReasoningBoxHitBoundaries pins the edges of the hit-test, which boxRow
+// alone cannot: the last row of the box must hit, and the rows immediately
+// before and after it must miss. An off-by-one at either end is a box whose
+// clickable area does not match the box the user can see.
+func TestReasoningBoxHitBoundaries(t *testing.T) {
+	m := mouseTestModel()
+	if m.reasoningSpanStart >= m.reasoningSpanEnd {
+		t.Fatal("precondition: reasoning box did not record a span")
+	}
+	if m.reasoningSpanEnd-m.reasoningSpanStart < 2 {
+		t.Fatalf("precondition: span %d..%d is too short for a boundary test to say anything",
+			m.reasoningSpanStart, m.reasoningSpanEnd)
+	}
+
+	cases := []struct {
+		name string
+		row  int
+		want bool
+	}{
+		{"first row of the span", m.rowFor(m.reasoningSpanStart), true},
+		{"last row of the span", m.rowFor(m.reasoningSpanEnd - 1), true},
+		{"the row after the span", m.rowFor(m.reasoningSpanEnd), false},
+		{"the row before the span", m.rowFor(m.reasoningSpanStart - 1), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := m.reasoningBoxHit(tc.row); got != tc.want {
+				t.Errorf("reasoningBoxHit(y=%d) = %v, want %v (span %d..%d, header %d rows)",
+					tc.row, got, tc.want, m.reasoningSpanStart, m.reasoningSpanEnd,
+					m.presenter.HeaderHeight(m.viewState()))
+			}
+		})
+	}
+
+	// And the same boundaries as real clicks: only the rows inside the span
+	// toggle the collapse state.
+	if after := clickAt(m, m.rowFor(m.reasoningSpanEnd)); after.reasoningCollapsed != m.reasoningCollapsed {
+		t.Error("a click one row below the box toggled the collapse state")
+	}
+	if after := clickAt(m, m.rowFor(m.reasoningSpanEnd-1)); after.reasoningCollapsed == m.reasoningCollapsed {
+		t.Error("a click on the box's last row did not toggle the collapse state")
+	}
 }
 
 // clickAt synthesizes a left-button press at the given terminal row and runs
