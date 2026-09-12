@@ -81,8 +81,12 @@ type DialogOption struct {
 // since Dialog itself carries no MaxVisible) — a Presenter renders every row
 // it's given. An ask with no options at all (free-text-only) arrives with
 // Options empty; a Presenter falls back to placing Title alone, the same
-// degrade DialogResume (not yet implemented) or any other Title-only kind
-// gets for free.
+// degrade any other Title-only kind gets for free.
+//
+// DialogResume (Phase 3 Task 15, the /resume picker) reuses this exact same
+// shape — Title, single-select Options, Hint — built by tui/resume.go's
+// buildResumeDialog, so both presenters render it through their DialogAsk
+// branch with no dedicated DialogResume rendering code at all.
 //
 // DialogApproval uses the rest of the fields:
 //   - Rows holds the argument card: one [key, value] pair per structured

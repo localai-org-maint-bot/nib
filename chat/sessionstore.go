@@ -55,7 +55,15 @@ func (s *SessionStore) path(id string) string {
 // rename itself means a crash mid-write leaves either the old file intact or
 // the new one complete, never a truncated one.
 func (s *SessionStore) Save(rec SessionRecord) error {
-	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+	// 0o700, not 0o755: a session file (0o600, os.CreateTemp's default,
+	// preserved through the rename below) protects the transcript CONTENT,
+	// but a world/group-readable directory still lets any local user list
+	// session ids and their timestamps across every project this user has
+	// ever run nib in — a real privacy leak (usage timing/frequency) the
+	// directory mode alone controls. Matches the existing precedent for
+	// sensitive local state: loop/persist.go and setup/write.go both use
+	// 0o700 for the directory holding what they write.
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return fmt.Errorf("sessionstore: create %s: %w", s.Dir, err)
 	}
 	data, err := json.MarshalIndent(rec, "", "  ")
