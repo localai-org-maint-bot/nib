@@ -108,8 +108,16 @@ func relativeAge(t time.Time) string {
 // presenters' existing DialogAsk rendering branch covers DialogResume too
 // without a second implementation (see tui/render/inline and
 // tui/render/full's Dialog method).
-func buildResumeDialog(list *render.SelectList) render.Dialog {
-	d := render.Dialog{Kind: render.DialogResume, Title: theme.ResumeTitle, Hint: theme.HelpResume}
+// deleteArmed swaps the dialog's Hint from the normal help line to
+// theme.ResumeDeleteConfirm while a delete is pending confirmation (see
+// Model.handleResumeDeleteKey) — the same Dialog value, just a different
+// prompt beneath the option list.
+func buildResumeDialog(list *render.SelectList, deleteArmed bool) render.Dialog {
+	hint := theme.HelpResume
+	if deleteArmed {
+		hint = theme.ResumeDeleteConfirm
+	}
+	d := render.Dialog{Kind: render.DialogResume, Title: theme.ResumeTitle, Hint: hint}
 	start, end := list.Window()
 	for i := start; i < end; i++ {
 		d.Options = append(d.Options, render.DialogOption{Text: list.Items[i]})
@@ -260,6 +268,81 @@ func (m Model) cancelResume() (tea.Model, tea.Cmd) {
 	m.resumeSessions = nil
 	m.updateViewport()
 	return m, nil
+}
+
+// handleResumeDeleteKey implements the /resume picker's delete affordance
+// (Task 20) as a two-keypress confirm rather than an undo: chat/session-
+// store.go has no trash or soft-delete, so Delete removes the file outright
+// and there would be nothing left to "undo" against — a fake undo that could
+// not actually recover the transcript would be worse than none. The first
+// 'd' only arms deletion of the highlighted row (buildResumeDialog swaps in
+// theme.ResumeDeleteConfirm so the picker itself says so); a SECOND 'd' with
+// nothing else pressed in between performs it. Any other key — including
+// Esc, handled by the awaitingResume block in Update that calls this —
+// clears resumeDeleteArmed instead of deleting, so an accidental second
+// keypress while merely navigating never lands on a row the user only meant
+// to look at.
+//
+// This lives here, called only from the m.awaitingResume branch of Update,
+// rather than inside the shared handleListDialogKey below: that helper is
+// also used by ask_user, which has nothing to delete, so folding 'd' into it
+// would fire the same delete-arming logic there — dead code at best, a
+// landmine if ask_user ever gives 'd' its own meaning at worst.
+func (m Model) handleResumeDeleteKey() (tea.Model, tea.Cmd) {
+	if m.resumeList == nil || len(m.resumeList.Items) == 0 {
+		return m, nil
+	}
+	if m.resumeDeleteArmed {
+		m.resumeDeleteArmed = false
+		m.deleteResumeSelection()
+		return m, nil
+	}
+	m.resumeDeleteArmed = true
+	m.updateViewport()
+	return m, nil
+}
+
+// deleteResumeSelection removes the highlighted session's stored file (via
+// m.store.Delete) and drops it from both resumeSessions and resumeList so
+// the picker reflects the change immediately. Deletion is best-effort,
+// exactly like recordSession's autosave: a failure is logged and swallowed
+// rather than surfaced as an error banner over a modal list dialog, since
+// there both is no good place to put that banner and nothing the user could
+// do about it from here anyway.
+//
+// Handles both edge cases CORRECTNESS REQUIREMENTS calls out: an empty list
+// after the delete closes the picker instead of leaving a dialog with
+// nothing to show, and Selected is clamped back into range when the deleted
+// row was the last one (SelectList.Move wraps and Page clamps, but neither
+// runs as part of a delete, so this must clamp on its own).
+func (m *Model) deleteResumeSelection() {
+	if m.resumeList == nil {
+		return
+	}
+	idx := m.resumeList.Selected
+	if idx < 0 || idx >= len(m.resumeSessions) {
+		return
+	}
+	id := m.resumeSessions[idx].ID
+	if m.store != nil {
+		if err := m.store.Delete(id); err != nil {
+			xlog.Warn("session delete failed", "id", id, "error", err)
+		}
+	}
+	m.resumeSessions = append(m.resumeSessions[:idx], m.resumeSessions[idx+1:]...)
+	m.resumeList.Items = append(m.resumeList.Items[:idx], m.resumeList.Items[idx+1:]...)
+	if len(m.resumeSessions) == 0 {
+		m.awaitingResume = false
+		m.resumeList = nil
+		m.resumeSessions = nil
+		m.appendMessage(ChatMessage{Role: "agent", Content: theme.ResumeEmpty})
+		m.updateViewport()
+		return
+	}
+	if m.resumeList.Selected >= len(m.resumeList.Items) {
+		m.resumeList.Selected = len(m.resumeList.Items) - 1
+	}
+	m.updateViewport()
 }
 
 // handleListDialogKey applies the navigation shared by every keyboard-driven

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ import (
 
 func TestBuildResumeDialog(t *testing.T) {
 	list := &render.SelectList{Items: []string{"a · 1m ago · 2 messages", "b · 2h ago · 5 messages"}, Selected: 1}
-	d := buildResumeDialog(list)
+	d := buildResumeDialog(list, false)
 	if d.Kind != render.DialogResume {
 		t.Fatalf("Kind = %v, want DialogResume", d.Kind)
 	}
@@ -363,5 +364,214 @@ func mustSaveTUI(t *testing.T, s *chat.SessionStore, rec chat.SessionRecord) {
 	t.Helper()
 	if err := s.Save(rec); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestHelpResumeAdvertisesDelete pins the Task 20 requirement that the delete
+// key be advertised in the picker's help copy, not just implemented silently.
+func TestHelpResumeAdvertisesDelete(t *testing.T) {
+	if !strings.Contains(theme.HelpResume, "d delete") {
+		t.Errorf("theme.HelpResume = %q, want it to advertise the delete key", theme.HelpResume)
+	}
+}
+
+// TestResumeDeletePressOnceArmsWithoutDeleting proves a single 'd' press does
+// NOT delete anything: destroying a whole recorded transcript on one
+// keypress in a list the user is already navigating with keystrokes is
+// exactly the accident shape the Task 20 brief warns about, so the first
+// press only arms a confirm.
+func TestResumeDeletePressOnceArmsWithoutDeleting(t *testing.T) {
+	dir := t.TempDir()
+	store := chat.NewSessionStore(dir)
+	mustSaveTUI(t, store, chat.SessionRecord{ID: "alpha", Cwd: "/p"})
+	mustSaveTUI(t, store, chat.SessionRecord{ID: "beta", Cwd: "/p"})
+	sessions := []chat.SessionRecord{{ID: "alpha"}, {ID: "beta"}}
+
+	m := newTestModel(Model{
+		store: store, textarea: textarea.New(), viewport: viewport.New(80, 20), width: 80,
+		awaitingResume: true, resumeSessions: sessions,
+		resumeList: &render.SelectList{Items: resumeItems(sessions)},
+		presenter:  testPresenter(),
+	})
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	nm := next.(Model)
+	if cmd != nil {
+		t.Error("arming delete should not itself return a cmd")
+	}
+	if !nm.awaitingResume || len(nm.resumeSessions) != 2 {
+		t.Fatalf("first 'd' press should only arm, not delete: awaitingResume=%v sessions=%d", nm.awaitingResume, len(nm.resumeSessions))
+	}
+	if !nm.resumeDeleteArmed {
+		t.Error("resumeDeleteArmed should be true after the first 'd' press")
+	}
+	for _, id := range []string{"alpha", "beta"} {
+		if _, err := os.Stat(filepath.Join(dir, id+".json")); err != nil {
+			t.Errorf("first 'd' press deleted %s.json, want it untouched: %v", id, err)
+		}
+	}
+}
+
+// TestResumeDeleteSecondPressDeletesTheFile proves the second 'd' press (with
+// no other key in between) actually deletes the highlighted session's file
+// and drops it from the picker's in-memory lists.
+func TestResumeDeleteSecondPressDeletesTheFile(t *testing.T) {
+	dir := t.TempDir()
+	store := chat.NewSessionStore(dir)
+	mustSaveTUI(t, store, chat.SessionRecord{ID: "alpha", Cwd: "/p"})
+	mustSaveTUI(t, store, chat.SessionRecord{ID: "beta", Cwd: "/p"})
+	sessions := []chat.SessionRecord{{ID: "alpha"}, {ID: "beta"}}
+
+	m := newTestModel(Model{
+		store: store, textarea: textarea.New(), viewport: viewport.New(80, 20), width: 80,
+		awaitingResume: true, resumeSessions: sessions,
+		resumeList: &render.SelectList{Items: resumeItems(sessions)}, // Selected == 0 -> "alpha"
+		presenter:  testPresenter(),
+	})
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	nm := next.(Model)
+	next, cmd := nm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	nm = next.(Model)
+
+	if cmd != nil {
+		t.Error("deleting should not itself return a cmd")
+	}
+	if nm.resumeDeleteArmed {
+		t.Error("resumeDeleteArmed should be cleared once the delete is applied")
+	}
+	if len(nm.resumeSessions) != 1 || nm.resumeSessions[0].ID != "beta" {
+		t.Fatalf("resumeSessions after delete = %+v, want just beta", nm.resumeSessions)
+	}
+	if len(nm.resumeList.Items) != 1 {
+		t.Fatalf("resumeList.Items after delete = %+v, want 1 entry", nm.resumeList.Items)
+	}
+	if !nm.awaitingResume {
+		t.Error("the picker should stay open — one session remains")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "alpha.json")); !os.IsNotExist(err) {
+		t.Errorf("alpha.json should have been deleted, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "beta.json")); err != nil {
+		t.Errorf("beta.json should survive, stat err = %v", err)
+	}
+}
+
+// TestResumeDeleteAnyOtherKeyCancelsTheArm proves the confirm arms for
+// exactly one keypress: pressing something other than 'd' after arming
+// cancels the pending delete (and still does its own normal thing — here,
+// moving the selection) rather than deleting on some later keypress the user
+// no longer intends as a confirm.
+func TestResumeDeleteAnyOtherKeyCancelsTheArm(t *testing.T) {
+	dir := t.TempDir()
+	store := chat.NewSessionStore(dir)
+	mustSaveTUI(t, store, chat.SessionRecord{ID: "alpha", Cwd: "/p"})
+	mustSaveTUI(t, store, chat.SessionRecord{ID: "beta", Cwd: "/p"})
+	sessions := []chat.SessionRecord{{ID: "alpha"}, {ID: "beta"}}
+
+	m := newTestModel(Model{
+		store: store, textarea: textarea.New(), viewport: viewport.New(80, 20), width: 80,
+		awaitingResume: true, resumeSessions: sessions,
+		resumeList: &render.SelectList{Items: resumeItems(sessions)},
+		presenter:  testPresenter(),
+	})
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	nm := next.(Model)
+	if !nm.resumeDeleteArmed {
+		t.Fatal("expected armed after the first 'd'")
+	}
+
+	next, _ = nm.Update(tea.KeyMsg{Type: tea.KeyDown})
+	nm = next.(Model)
+	if nm.resumeDeleteArmed {
+		t.Error("Down should have cancelled the pending delete, not left it armed")
+	}
+	if nm.resumeList.Selected != 1 {
+		t.Errorf("Down should still move the selection normally: Selected = %d", nm.resumeList.Selected)
+	}
+
+	// A THIRD press of 'd' here is a fresh arm on the new row, not a delete —
+	// proving the earlier arm was really cancelled and not just relocated.
+	next, _ = nm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	nm = next.(Model)
+	if !nm.resumeDeleteArmed || len(nm.resumeSessions) != 2 {
+		t.Fatalf("'d' after Down should re-arm, not delete: armed=%v sessions=%d", nm.resumeDeleteArmed, len(nm.resumeSessions))
+	}
+}
+
+// TestResumeDeleteLastSessionClosesPickerCleanly proves the picker degrades
+// sanely once a delete empties the list: no crash, no out-of-range
+// selection, and awaitingResume clears.
+func TestResumeDeleteLastSessionClosesPickerCleanly(t *testing.T) {
+	dir := t.TempDir()
+	store := chat.NewSessionStore(dir)
+	mustSaveTUI(t, store, chat.SessionRecord{ID: "alpha", Cwd: "/p"})
+	sessions := []chat.SessionRecord{{ID: "alpha"}}
+
+	m := newTestModel(Model{
+		store: store, textarea: textarea.New(), viewport: viewport.New(80, 20), width: 80,
+		awaitingResume: true, resumeSessions: sessions,
+		resumeList: &render.SelectList{Items: resumeItems(sessions)},
+		presenter:  testPresenter(),
+	})
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	nm := next.(Model)
+	next, _ = nm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	nm = next.(Model)
+
+	if nm.awaitingResume || nm.resumeList != nil || nm.resumeSessions != nil {
+		t.Fatalf("deleting the only session should close the picker cleanly: %+v", nm)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "alpha.json")); !os.IsNotExist(err) {
+		t.Errorf("alpha.json should have been deleted, stat err = %v", err)
+	}
+}
+
+// TestResumeDeleteLastRowClampsSelection proves deleting the LAST row of a
+// longer list clamps Selected back into range instead of leaving it pointing
+// past the end of the shrunk slice — SelectList.Move wraps and Page clamps,
+// neither of which runs as part of a delete, so the delete path must clamp
+// itself.
+func TestResumeDeleteLastRowClampsSelection(t *testing.T) {
+	dir := t.TempDir()
+	store := chat.NewSessionStore(dir)
+	mustSaveTUI(t, store, chat.SessionRecord{ID: "alpha", Cwd: "/p"})
+	mustSaveTUI(t, store, chat.SessionRecord{ID: "beta", Cwd: "/p"})
+	sessions := []chat.SessionRecord{{ID: "alpha"}, {ID: "beta"}}
+
+	m := newTestModel(Model{
+		store: store, textarea: textarea.New(), viewport: viewport.New(80, 20), width: 80,
+		awaitingResume: true, resumeSessions: sessions,
+		resumeList: &render.SelectList{Items: resumeItems(sessions), Selected: 1}, // "beta", the last row
+		presenter:  testPresenter(),
+	})
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	nm := next.(Model)
+	next, _ = nm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	nm = next.(Model)
+
+	if len(nm.resumeSessions) != 1 || nm.resumeSessions[0].ID != "alpha" {
+		t.Fatalf("resumeSessions after deleting the last row = %+v, want just alpha", nm.resumeSessions)
+	}
+	if nm.resumeList.Selected < 0 || nm.resumeList.Selected >= len(nm.resumeList.Items) {
+		t.Fatalf("Selected = %d out of range for %d items", nm.resumeList.Selected, len(nm.resumeList.Items))
+	}
+}
+
+// TestBuildResumeDialogArmedShowsConfirmHint proves the dialog's own hint
+// line switches to the delete-confirm prompt while armed, distinct from the
+// normal HelpResume hint (see buildResumeDialog).
+func TestBuildResumeDialogArmedShowsConfirmHint(t *testing.T) {
+	list := &render.SelectList{Items: []string{"a · 1m ago · 2 messages"}}
+	d := buildResumeDialog(list, true)
+	if d.Hint != theme.ResumeDeleteConfirm {
+		t.Errorf("armed Hint = %q, want %q", d.Hint, theme.ResumeDeleteConfirm)
+	}
+	d = buildResumeDialog(list, false)
+	if d.Hint != theme.HelpResume {
+		t.Errorf("unarmed Hint = %q, want %q", d.Hint, theme.HelpResume)
 	}
 }

@@ -86,9 +86,17 @@ const (
 	// (a %d format string for the message count) confirms a successful
 	// restore.
 	ResumeTitle    = "resume a session"
-	HelpResume     = "up/down move · pgup/pgdn page · enter resume · esc cancel"
+	HelpResume     = "up/down move · pgup/pgdn page · enter resume · d delete · esc cancel"
 	ResumeEmpty    = "no recorded sessions here · /resume --all to look wider"
 	ResumeRestored = "restored session · %d messages"
+
+	// ResumeDeleteConfirm replaces the picker's normal hint once its delete
+	// key has been pressed once (Task 20): deleting a recorded session
+	// removes the file outright with no trash/undo (chat.SessionStore has
+	// neither), so a single "d" only ARMS deletion of the highlighted row —
+	// this is the prompt shown while armed. A second "d" (with nothing else
+	// pressed in between) performs the delete; any other key cancels the arm.
+	ResumeDeleteConfirm = "press d again to delete this session · any other key cancels"
 
 	// YoloUsage is the /yolo slash command's usage error, shown when the
 	// argument after "yolo" is neither empty, "on" nor "off".

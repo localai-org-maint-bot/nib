@@ -205,6 +205,12 @@ type Model struct {
 	// would have to parse back out.
 	resumeList     *render.SelectList
 	resumeSessions []chat.SessionRecord
+	// resumeDeleteArmed is Task 20's delete confirm: true right after the
+	// picker's delete key ('d') has been pressed once, cleared by a second
+	// 'd' (which performs the delete) or by any other key (which cancels it
+	// instead). See handleResumeDeleteKey (tui/resume.go) for the full
+	// rationale.
+	resumeDeleteArmed bool
 
 	// store persists the transcript at every turn boundary and on exit (see
 	// recordSession) and backs /resume's listing. sessionID and sessionTitle
@@ -675,6 +681,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// nothing else a keypress could mean while this dialog owns the
 		// screen).
 		if m.awaitingResume && m.resumeList != nil {
+			// 'd' is the picker's delete key (Task 20) — scoped to exactly this
+			// branch so it never fires for ask_user's own list dialog below,
+			// which shares handleListDialogKey but has nothing to delete. Like
+			// every other picker shortcut it only claims the key while the
+			// composer is empty (mirroring handleListDialogKey's own guard),
+			// so a free-text 'd' elsewhere in the app is unaffected.
+			if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'd' && strings.TrimSpace(m.textarea.Value()) == "" {
+				return m.handleResumeDeleteKey()
+			}
+			// A pending delete confirm is cancelled by anything other than the
+			// second 'd' above — but the key still does whatever it would
+			// normally do (arrows still move the selection, Esc still cancels
+			// the whole picker via cancelResume below): cancelling the arm
+			// means "don't also treat this keypress as a delete", not "eat the
+			// keypress".
+			m.resumeDeleteArmed = false
 			if next, cmd, handled := m.handleListDialogKey(msg, m.resumeList, func(mm Model) (tea.Model, tea.Cmd) { return mm.cancelResume() }); handled {
 				return next, cmd
 			}
@@ -2079,7 +2101,7 @@ func (m Model) currentDialogs() []render.Dialog {
 		dialogs = append(dialogs, buildAskDialog(*m.pendingAsk, m.askList, m.awaitingApproval))
 	}
 	if m.awaitingResume && m.resumeList != nil {
-		dialogs = append(dialogs, buildResumeDialog(m.resumeList))
+		dialogs = append(dialogs, buildResumeDialog(m.resumeList, m.resumeDeleteArmed))
 	}
 	return dialogs
 }
@@ -2416,6 +2438,8 @@ func (m Model) helpLine() string {
 		return theme.HelpApproval
 	case m.awaitingAsk:
 		return theme.HelpAsk
+	case m.awaitingResume && m.resumeDeleteArmed:
+		return theme.ResumeDeleteConfirm
 	case m.awaitingResume:
 		return theme.HelpResume
 	case m.parked:
