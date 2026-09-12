@@ -20,6 +20,8 @@ import (
 	"github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/setup"
 	"github.com/mudler/nib/trace"
+	"github.com/mudler/nib/tui/render/full"
+	"github.com/mudler/nib/tui/render/inline"
 	"github.com/mudler/nib/types"
 	"github.com/mudler/xlog"
 	"golang.org/x/term"
@@ -500,13 +502,13 @@ func runCtx(ctx context.Context, o Options) int {
 				return 1
 			}
 		} else {
-			if err := cmd.RunTUI(ctx, cfg, height, streams, shellJobs, transports...); err != nil {
+			if err := cmd.RunTUI(ctx, cfg, height, streams, shellJobs, inline.New(), transports...); err != nil {
 				fmt.Fprintf(o.stderr(), "Error: %v\n", err)
 				return 1
 			}
 		}
 	default: // modeTUI, fullscreen, direct (no tmux split)
-		if err := cmd.RunTUI(ctx, cfg, parseHeight("100%"), streams, shellJobs, transports...); err != nil {
+		if err := cmd.RunTUI(ctx, cfg, parseHeight("100%"), streams, shellJobs, full.New(), transports...); err != nil {
 			fmt.Fprintf(o.stderr(), "Error: %v\n", err)
 			return 1
 		}

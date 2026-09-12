@@ -270,7 +270,7 @@ type sessionReadyMsg struct {
 }
 
 // NewModel creates a new TUI model
-func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) Model {
+func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizmcp.ShellJobs, p render.Presenter, transports ...mcp.Transport) Model {
 	ctx, cancel := context.WithCancel(ctx)
 
 	ta := textarea.New()
@@ -304,7 +304,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		logVP:            viewport.New(80, 10),
 		textarea:         ta,
 		spinner:          s,
-		presenter:        inline.New(),
+		presenter:        p,
 		msgViewCache:     &messageProjCache{},
 		messages:         []ChatMessage{},
 		ctx:              ctx,
