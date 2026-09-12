@@ -56,7 +56,7 @@ type Session struct {
 	allowedTools         map[string]bool  // Tools that don't need approval this session
 	toolAllow            map[string]bool  // if non-empty, the only built-in tools exposed to the model
 	allowedBashPrefixes  map[string]bool  // bash first-word grants ("git" → simple `git …` auto-approved)
-	autoApprove          bool             // approval_mode: auto — approve every tool call
+	autoApprove          atomic.Bool      // approval_mode: auto, or the /yolo toggle — approve every tool call
 	allowAllTurn         bool             // user chose "allow all this turn"; reset each top-level turn
 	approvalMode         string           // raw approval_mode: "" / "prompt" / "strict" / "allowlist" / "auto"
 	readOnlyCommands     readOnlyCommands // bash commands auto-approved in prompt mode
@@ -424,7 +424,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	for _, name := range cfg.BuiltinTools {
 		s.toolAllow[name] = true
 	}
-	s.autoApprove = cfg.ApprovalMode == "auto"
+	s.autoApprove.Store(cfg.ApprovalMode == "auto")
 	s.approvalMode = cfg.ApprovalMode
 	s.readOnlyCommands = newReadOnlyCommands(cfg.ReadOnlyCommands)
 	// Wire reloadable state (skills server, config MCP clients, agents, hooks,
@@ -450,6 +450,19 @@ func (s *Session) LoadSkill(name string) (string, error) {
 	}
 	return "", fmt.Errorf("unknown skill %q", name)
 }
+
+// SetAutoApprove turns the session-wide approve-everything switch on or off at
+// runtime (the /yolo toggle). It is deliberately atomic rather than guarded by
+// historyMu, which is held across whole tool calls.
+//
+// It does not touch allowedTools or allowedBashPrefixes: those are narrower
+// grants the user minted explicitly, and revoking them as a side effect of
+// flipping this switch would be a surprise. It also cannot bypass the
+// external-influence gate in decideToolCall, which runs first.
+func (s *Session) SetAutoApprove(on bool) { s.autoApprove.Store(on) }
+
+// AutoApprove reports whether every tool call is currently auto-approved.
+func (s *Session) AutoApprove() bool { return s.autoApprove.Load() }
 
 // decideToolCall resolves a tool-call request: PreToolUse hooks first (a hook
 // may block/approve/adjust), then the session allow-list, then the user gate.
@@ -506,7 +519,7 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 		}
 	}
 
-	if s.autoApprove || s.allowAllTurn {
+	if s.autoApprove.Load() || s.allowAllTurn {
 		return cogito.ToolCallDecision{Approved: true}
 	}
 	if s.allowedTools[req.Name] {

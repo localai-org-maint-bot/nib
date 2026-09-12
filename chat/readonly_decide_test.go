@@ -21,13 +21,14 @@ func enableProvenance(s *Session) *Session {
 // newDecideSession builds a minimal Session exercising only decideToolCall's
 // approval logic — no MCP/agent wiring needed.
 func newDecideSession(mode string, onCall func(ToolCallRequest) ToolCallResponse) *Session {
-	return &Session{
+	s := &Session{
 		allowedTools:     map[string]bool{},
 		approvalMode:     mode,
-		autoApprove:      mode == "auto",
 		readOnlyCommands: newReadOnlyCommands(nil),
 		callbacks:        Callbacks{OnToolCall: onCall},
 	}
+	s.autoApprove.Store(mode == "auto")
+	return s
 }
 
 func TestDecideReadOnlyAutoApprovesInPromptMode(t *testing.T) {
