@@ -138,21 +138,30 @@ func (c *compState) accept() (string, bool) {
 }
 
 // exact reports whether input already equals the currently SELECTED match's
-// verb ("/yolo" with "yolo" highlighted, say) — nothing is left to complete,
-// so a caller like KeyEnter should submit rather than accept. Comparing
-// against the selection rather than requiring a sole match matters for a
-// genuine prefix pair like the built-in "/model" and "/models": typing
-// "/model" in full still produces two matches (filterComp is substring, and
-// "models" contains "model"), so a sole-match gate would never fire for it —
-// reintroducing the double-Enter papercut for exactly the verb that caused
-// it. Moving the selection onto "models" instead makes this false again, so
-// Enter still completes to the longer verb.
+// full Insert token, modulo the trailing space ("/yolo" with "yolo"
+// highlighted, say) — nothing is left to complete, so a caller like KeyEnter
+// should submit rather than accept. Comparing against the selection rather
+// than requiring a sole match matters for a genuine prefix pair like the
+// built-in "/model" and "/models": typing "/model" in full still produces two
+// matches (filterComp is substring, and "models" contains "model"), so a
+// sole-match gate would never fire for it — reintroducing the double-Enter
+// papercut for exactly the verb that caused it. Moving the selection onto
+// "models" instead makes this false again, so Enter still completes to the
+// longer verb.
+//
+// This is keyed on Insert, not "/"+it.Name: for compBuiltin and compCmd items
+// Insert is "/" + Name + " ", so the two agree, but compSkill and compAgent
+// items complete to "/skill <name> " / "/agent <name> " while Name is just
+// the bare name — "/" + it.Name would then equal the typed text for a FULL
+// skill/agent name too, wrongly reporting nothing left to complete and
+// causing KeyEnter to submit "/explore" as a verb instead of accepting the
+// "/agent explore " completion.
 func (c *compState) exact(input string) bool {
 	it, ok := c.current()
 	if !ok {
 		return false
 	}
-	return input == "/"+it.Name
+	return it.Insert == input+" "
 }
 
 // ghost returns the suffix of the selected item's Insert beyond the current

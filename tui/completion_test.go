@@ -308,6 +308,68 @@ func TestEnterCompletionModelModelsOtherSelectionCompletes(t *testing.T) {
 	}
 }
 
+// TestEnterCompletionFullAgentNameCompletes and
+// TestEnterCompletionFullSkillNameCompletes are the regression case for the
+// exact() guard introduced this wave: compSkill and compAgent items complete
+// to "/skill <name> " / "/agent <name> " (buildCompItems), so their Name
+// field alone ("explore", "reviewer") is not the command the way it is for
+// compBuiltin/compCmd items. Comparing exact() against "/" + it.Name wrongly
+// reported "/explore" (a FULL agent name) as nothing-left-to-complete, so
+// Enter fell through to submit — and slash.Resolve has no "explore" verb,
+// so it errored instead of completing to "/agent explore ". exact() must key
+// off the item's own Insert instead.
+func TestEnterCompletionFullAgentNameCompletes(t *testing.T) {
+	m := newQueueTestModel()
+	m.session = &chat.Session{}
+	cmds, skills, agents := sampleRegistries()
+	m.completion.setRegistries(cmds, skills, agents)
+
+	m.textarea.SetValue("/explore")
+	m.completion.sync(m.textarea.Value())
+	if !m.completion.active || len(m.completion.matches) != 1 {
+		t.Fatalf("fixture: want popup active with sole match, got active=%v matches=%d", m.completion.active, len(m.completion.matches))
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("completing a full agent name must not start a turn")
+	}
+	nm := next.(Model)
+
+	if got := nm.textarea.Value(); got != "/agent explore " {
+		t.Fatalf("textarea = %q, want %q", got, "/agent explore ")
+	}
+	if len(nm.messages) != 0 {
+		t.Fatalf("completing a full agent name must not dispatch, got %+v", nm.messages)
+	}
+}
+
+func TestEnterCompletionFullSkillNameCompletes(t *testing.T) {
+	m := newQueueTestModel()
+	m.session = &chat.Session{}
+	cmds, skills, agents := sampleRegistries()
+	m.completion.setRegistries(cmds, skills, agents)
+
+	m.textarea.SetValue("/reviewer")
+	m.completion.sync(m.textarea.Value())
+	if !m.completion.active || len(m.completion.matches) != 1 {
+		t.Fatalf("fixture: want popup active with sole match, got active=%v matches=%d", m.completion.active, len(m.completion.matches))
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("completing a full skill name must not start a turn")
+	}
+	nm := next.(Model)
+
+	if got := nm.textarea.Value(); got != "/skill reviewer " {
+		t.Fatalf("textarea = %q, want %q", got, "/skill reviewer ")
+	}
+	if len(nm.messages) != 0 {
+		t.Fatalf("completing a full skill name must not dispatch, got %+v", nm.messages)
+	}
+}
+
 // TestEnterCompletionEmptyComposerNoOp and
 // TestEnterCompletionInactiveSubmitsNormally cover "nothing typed, or no
 // popup -> unchanged": the exact-match guard must never engage when there is
