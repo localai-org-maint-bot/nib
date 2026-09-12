@@ -98,7 +98,7 @@ func (Base) Reasoning(v ViewState, w int) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(Loader(v.Spinner, v.Status, "", w))
+	b.WriteString(Loader(v.Spinner, v.Status))
 	b.WriteString("\n")
 	if strings.TrimSpace(v.Reasoning.Text) != "" {
 		r := v.Reasoning
