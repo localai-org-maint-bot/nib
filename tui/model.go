@@ -26,6 +26,7 @@ import (
 	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/tui/render"
+	"github.com/mudler/nib/tui/render/inline"
 )
 
 // ChatMessage represents a message in the chat history
@@ -43,6 +44,12 @@ type Model struct {
 	viewport viewport.Model
 	textarea textarea.Model
 	spinner  spinner.Model
+
+	// presenter renders every block. Chosen once at construction from the run
+	// mode; the model never branches on mode itself. May be nil on a Model
+	// built as a bare struct literal (as many tests do) — updateViewport and
+	// View fall back to inline.New() in that case.
+	presenter render.Presenter
 
 	// Chat state
 	messages     []ChatMessage
@@ -272,6 +279,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		logVP:            viewport.New(80, 10),
 		textarea:         ta,
 		spinner:          s,
+		presenter:        inline.New(),
 		messages:         []ChatMessage{},
 		ctx:              ctx,
 		cancel:           cancel,
@@ -1546,6 +1554,11 @@ func (m *Model) updateViewportFollow() {
 func (m *Model) updateViewport() {
 	var sb strings.Builder
 
+	presenter := m.presenter
+	if presenter == nil {
+		presenter = inline.New()
+	}
+
 	// Calculate available width for content (use viewport width, not terminal width)
 	contentWidth := m.viewport.Width
 	if contentWidth <= 0 {
@@ -1555,6 +1568,7 @@ func (m *Model) updateViewport() {
 		contentWidth = 80 // fallback
 	}
 
+	prevRole := render.RoleNone
 	lastAgent := "" // id of the agent whose line was rendered last, "" for non-agent
 	for i := 0; i < len(m.messages); i++ {
 		msg := m.messages[i]
@@ -1582,108 +1596,44 @@ func (m *Model) updateViewport() {
 
 		switch msg.Role {
 		case "user":
-			prefix := userStyle.Render("you") + " " + theme.SepStyle.Render(theme.Sep) + " "
-			prefixWidth := lipgloss.Width(prefix)
-			wrappedContent := render.Wrap(msg.Content, contentWidth-prefixWidth)
-			// Add prefix to first line, indent continuation lines
-			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
-			for i, line := range lines {
-				if i == 0 {
-					// First line: prefix + content
-					sb.WriteString(prefix)
-					sb.WriteString(line)
-				} else {
-					// Continuation lines: indent with spaces only (no prefix)
-					sb.WriteString(strings.Repeat(" ", prefixWidth))
-					sb.WriteString(line)
-				}
-				sb.WriteString("\n")
-			}
+			sb.WriteString(presenter.Message(render.Message{Role: render.RoleUser, Content: msg.Content}, prevRole, contentWidth))
 			sb.WriteString("\n")
+			prevRole = render.RoleUser
 		case "assistant":
-			prefix := assistantStyle.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep) + " "
-			prefixWidth := lipgloss.Width(prefix)
-			wrappedContent := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
-			// Add prefix to first line, indent continuation lines
-			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
-			for i, line := range lines {
-				if i == 0 {
-					// First line: prefix + content
-					sb.WriteString(prefix)
-					sb.WriteString(line)
-				} else {
-					// Continuation lines: indent with spaces only (no prefix)
-					sb.WriteString(strings.Repeat(" ", prefixWidth))
-					sb.WriteString(line)
-				}
-				sb.WriteString("\n")
-			}
+			// Markdown is width-cached model state (glamour), not something a
+			// Presenter owns — pre-render it here at the width the presenter's
+			// prefix will leave for content, matching its own prefix exactly.
+			prefixWidth := lipgloss.Width(assistantStyle.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep) + " ")
+			rendered := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
+			sb.WriteString(presenter.Message(render.Message{Role: render.RoleAssistant, Content: rendered}, prevRole, contentWidth))
 			sb.WriteString("\n")
+			prevRole = render.RoleAssistant
 		case "agent":
-			prefix := theme.Subtle.Render(theme.SubAgent) + " "
-			prefixWidth := lipgloss.Width(prefix)
-			wrappedContent := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
-			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
-			for li, line := range lines {
-				if li == 0 {
-					sb.WriteString(prefix)
-					sb.WriteString(agentStyle.Render(line))
-				} else {
-					sb.WriteString(strings.Repeat(" ", prefixWidth))
-					sb.WriteString(agentStyle.Render(line))
-				}
-				sb.WriteString("\n")
-			}
+			prefixWidth := lipgloss.Width(theme.Subtle.Render(theme.SubAgent) + " ")
+			rendered := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
+			sb.WriteString(presenter.Message(render.Message{Role: render.RoleAgent, Content: rendered, AgentID: msg.AgentID}, prevRole, contentWidth))
 			// Tighten: a sub-agent lifecycle header hugs its own thread run that
-			// follows (tool lines / result) — omit the blank separator.
+			// follows (tool lines / result) — omit the blank separator. This
+			// depends on the NEXT raw message, which a Presenter never sees, so
+			// the decision stays here rather than moving into Message.
 			if !m.sameAgentMsg(i+1, msg.AgentID) {
 				sb.WriteString("\n")
 			}
+			prevRole = render.RoleAgent
 		case "tool":
-			// Calm, dim block: a header naming the tool, then the pretty/truncated
-			// output indented and dimmed beneath it.
-			label := msg.Name
-			if msg.Arguments != "" {
-				// First line of the friendly summary makes the clearest header.
-				summary := chat.FormatToolCall(msg.Name, msg.Arguments)
-				if nl := strings.IndexByte(summary, '\n'); nl >= 0 {
-					summary = summary[:nl]
-				}
-				if summary != "" {
-					label = summary
-				}
-			}
-			if msg.AgentID != "" {
-				label = theme.SubAgent + " " + shortID(msg.AgentID) + " · " + label
-			}
-			sb.WriteString(theme.Subtle.Render(theme.Sep + " " + label))
+			sb.WriteString(presenter.Message(render.Message{
+				Role:      render.RoleTool,
+				Content:   msg.Content,
+				Name:      msg.Name,
+				Arguments: msg.Arguments,
+				AgentID:   msg.AgentID,
+			}, prevRole, contentWidth))
 			sb.WriteString("\n")
-			// Content is already previewed (truncated + pretty) at append time.
-			wrapped := render.Wrap(msg.Content, contentWidth-2)
-			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
-				sb.WriteString("  " + theme.Help.Render(line))
-				sb.WriteString("\n")
-			}
-			sb.WriteString("\n")
+			prevRole = render.RoleTool
 		case "error":
-			prefix := errorStyle.Render(theme.Cross) + " "
-			prefixWidth := lipgloss.Width(prefix)
-			wrappedContent := render.Wrap(msg.Content, contentWidth-prefixWidth)
-			// Add prefix to first line, indent continuation lines
-			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
-			for i, line := range lines {
-				if i == 0 {
-					// First line: prefix + content
-					sb.WriteString(prefix)
-					sb.WriteString(line)
-				} else {
-					// Continuation lines: indent with spaces only (no prefix)
-					sb.WriteString(strings.Repeat(" ", prefixWidth))
-					sb.WriteString(line)
-				}
-				sb.WriteString("\n")
-			}
+			sb.WriteString(presenter.Message(render.Message{Role: render.RoleError, Content: msg.Content}, prevRole, contentWidth))
 			sb.WriteString("\n")
+			prevRole = render.RoleError
 		}
 	}
 
@@ -1692,63 +1642,45 @@ func (m *Model) updateViewport() {
 		if displayStatus == "" || displayStatus == "Thinking..." {
 			displayStatus = theme.VerbThinking
 		}
-		sb.WriteString(m.spinner.View() + " " + theme.Reasoning.Render(displayStatus))
-		sb.WriteString("\n")
-		if m.reasoning != "" {
-			sb.WriteString(theme.ReasoningHeader() + "\n")
-			wrapped := render.Wrap(m.reasoning, contentWidth-4)
-			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
-				sb.WriteString("  " + theme.Reasoning.Render(line) + "\n")
-			}
-		}
+		sb.WriteString(presenter.Reasoning(render.Reasoning{
+			Text:    m.reasoning,
+			Status:  displayStatus,
+			Spinner: m.spinner.View(),
+		}, contentWidth))
 	}
 
 	if m.awaitingApproval && m.pendingTool != nil {
-		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
-		sb.WriteString(gutter + theme.ApproveKey.Render(toolApprovalLabel(*m.pendingTool)))
-		sb.WriteString("\n")
-		if rows, ok := chat.ToolArgRows(m.pendingTool.Name, m.pendingTool.Arguments); ok {
-			// Structured args render as an aligned card: dim keys padded to a
-			// column; values truncated to the row (multi-line hints included).
-			maxKey := 0
-			for _, r := range rows {
-				if len(r.Key) > maxKey {
-					maxKey = len(r.Key)
-				}
-			}
-			for _, r := range rows {
-				key := r.Key + strings.Repeat(" ", maxKey-len(r.Key))
-				val := render.TruncateLine(r.ValueDisplay(), contentWidth-8-maxKey)
-				sb.WriteString(gutter + "  " + theme.Meta.Render(key) + "  " + theme.Help.Render(val) + "\n")
-			}
-		} else {
-			args := render.Wrap(chat.FormatToolCall(m.pendingTool.Name, m.pendingTool.Arguments), contentWidth-4)
-			for _, line := range strings.Split(strings.TrimRight(args, "\n"), "\n") {
-				sb.WriteString(gutter + theme.Help.Render(line) + "\n")
-			}
-		}
+		rows := approvalRows(*m.pendingTool)
+		var hint string
 		if m.pendingTool.Reasoning != "" {
-			rz := render.Wrap(m.pendingTool.Reasoning, contentWidth-4)
-			for _, line := range strings.Split(strings.TrimRight(rz, "\n"), "\n") {
-				sb.WriteString(gutter + theme.Reasoning.Render(line) + "\n")
-			}
+			hint = m.pendingTool.Reasoning
 		}
+		var options []string
 		if m.approvalEditing {
-			sb.WriteString(gutter + theme.ApproveKey.Render(theme.ApproveEditHint))
-			sb.WriteString("\n")
+			options = []string{theme.ApproveEditHint}
 		} else {
 			scope, _ := chat.GrantScope(m.pendingTool.Name, m.pendingTool.Arguments)
-			sb.WriteString(gutter + "\n")
-			sb.WriteString(gutter + theme.ApproveKey.Render(theme.ApproveOnce) + "\n")
-			sb.WriteString(gutter + theme.ApproveKey.Render(theme.ApproveAlwaysPrefix+scope+theme.ApproveAlwaysSuffix) + "\n")
-			sb.WriteString(gutter + theme.ApproveKey.Render(theme.ApproveTurn) + "\n")
-			sb.WriteString(gutter + theme.Help.Render(theme.ApproveDenyEdit) + "\n")
+			options = []string{
+				theme.ApproveOnce,
+				theme.ApproveAlwaysPrefix + scope + theme.ApproveAlwaysSuffix,
+				theme.ApproveTurn,
+				theme.ApproveDenyEdit,
+			}
 		}
+		sb.WriteString(presenter.Dialog(render.Dialog{
+			Kind:    render.DialogApproval,
+			Title:   toolApprovalLabel(*m.pendingTool),
+			Rows:    rows,
+			Hint:    hint,
+			Options: options,
+		}, contentWidth))
 	}
 
 	if m.awaitingAsk && m.pendingAsk != nil {
-		sb.WriteString(renderAsk(*m.pendingAsk, m.width))
-		sb.WriteString("\n")
+		sb.WriteString(presenter.Dialog(render.Dialog{
+			Kind:  render.DialogAsk,
+			Title: renderAsk(*m.pendingAsk, m.width),
+		}, contentWidth))
 	}
 
 	// Preserve the user's scroll position: only follow to the bottom when they
@@ -1771,23 +1703,21 @@ func (m Model) View() string {
 		return ""
 	}
 
+	presenter := m.presenter
+	if presenter == nil {
+		presenter = inline.New()
+	}
+
 	var sb strings.Builder
 
 	// Header: brand (plus a yolo badge when the approval gate is off) left,
 	// cwd right, one dim hairline beneath.
-	left := theme.Brand.Render(theme.BrandName)
-	if m.cfg.ApprovalMode == "auto" {
-		left += "  " + theme.Yolo.Render(theme.YoloBadge)
-	}
-	cwd := theme.Meta.Render(shortenPath(currentDir()))
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(cwd)
-	if gap < 1 {
-		gap = 1
-	}
-	sb.WriteString(left + strings.Repeat(" ", gap) + cwd)
-	sb.WriteString("\n")
-	sb.WriteString(theme.Rule.Render(strings.Repeat("─", max(1, m.width))))
-	sb.WriteString("\n")
+	sb.WriteString(presenter.Header(render.ViewState{
+		Width:       m.width,
+		Brand:       theme.BrandName,
+		Cwd:         shortenPath(currentDir()),
+		AutoApprove: m.cfg.ApprovalMode == "auto",
+	}))
 
 	// Body: log viewer, first-run empty state, otherwise the conversation viewport.
 	showingViewport := false
@@ -1828,45 +1758,29 @@ func (m Model) View() string {
 		sb.WriteString(m.textarea.View())
 	}
 	sb.WriteString("\n")
-	// Scroll-position signal: content arrived below the fold while the user was
-	// reading history. Without it the preserve-scroll behaviour is silent.
-	if showingViewport && !m.viewport.AtBottom() {
-		sb.WriteString(theme.NewOutputMarker())
-		sb.WriteString("\n")
-	}
-	help := theme.Help.Render(m.helpLine())
-	if badge := m.footerBadges(lipgloss.Width(help)); badge != "" {
-		gap := m.width - lipgloss.Width(help) - lipgloss.Width(badge)
-		if gap < 1 {
-			gap = 1
-		}
-		sb.WriteString(help + strings.Repeat(" ", gap) + badge)
-	} else {
-		sb.WriteString(help)
-	}
 
+	// Footer: new-output marker (scroll-position signal — content arrived below
+	// the fold while the user was reading history), help/badges line, error
+	// line, and the job footers. Hidden job footers while the log viewer owns
+	// the body.
+	fv := render.ViewState{
+		Width:     m.width,
+		NewOutput: showingViewport && !m.viewport.AtBottom(),
+	}
+	fv.Help = theme.Help.Render(m.helpLine())
+	fv.Badges = m.footerBadges(lipgloss.Width(fv.Help))
 	if m.err != nil {
-		sb.WriteString("\n" + theme.Error.Render(theme.Cross+" "+m.err.Error()))
+		fv.Err = m.err.Error()
 	}
-
-	// Jobs footers (renderers restyle internally; nil-safe when empty). Hidden
-	// while the log viewer owns the body.
 	if !m.showLogs {
-		if f := renderJobsFooter(m.jobs, m.width); f != "" {
-			sb.WriteString("\n" + f)
-		}
-		if f := renderShellJobsFooter(m.shellJobs.List(), m.width); f != "" {
-			sb.WriteString("\n" + f)
-		}
-		if f := renderLoopsFooter(m.loops, m.selfPaced, m.width); f != "" {
-			sb.WriteString("\n" + f)
-		}
+		fv.JobsFooter = renderJobsFooter(m.jobs, m.width)
+		fv.ShellJobsFooter = renderShellJobsFooter(m.shellJobs.List(), m.width)
+		fv.LoopsFooter = renderLoopsFooter(m.loops, m.selfPaced, m.width)
 		if m.session != nil {
-			if f := renderGoalFooter(m.session.Goal(), m.width); f != "" {
-				sb.WriteString("\n" + f)
-			}
+			fv.GoalFooter = renderGoalFooter(m.session.Goal(), m.width)
 		}
 	}
+	sb.WriteString(presenter.Footer(fv, m.width))
 
 	return sb.String()
 }

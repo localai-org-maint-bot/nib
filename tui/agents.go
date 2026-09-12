@@ -129,6 +129,22 @@ func toolApprovalLabel(req chat.ToolCallRequest) string {
 	return req.Name + " wants to run"
 }
 
+// approvalRows builds a render.Dialog's Rows for a tool-approval prompt: the
+// structured argument card when chat.ToolArgRows recognizes the tool (one row
+// per field), or a single fallback row carrying the raw formatted call
+// otherwise. inline.Dialog tells the two apart by that fallback row's empty
+// key — an empty-string key never occurs in a real structured row.
+func approvalRows(req chat.ToolCallRequest) [][2]string {
+	if rows, ok := chat.ToolArgRows(req.Name, req.Arguments); ok {
+		out := make([][2]string, len(rows))
+		for i, r := range rows {
+			out[i] = [2]string{r.Key, r.ValueDisplay()}
+		}
+		return out
+	}
+	return [][2]string{{"", chat.FormatToolCall(req.Name, req.Arguments)}}
+}
+
 // firstRunningJobID returns the id of the first running job, or "".
 func (m Model) firstRunningJobID() string {
 	for _, j := range m.jobs {
