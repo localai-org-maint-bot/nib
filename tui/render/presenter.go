@@ -24,6 +24,13 @@ type Caps struct {
 // model asks for the number rather than for the prefix string: a surface whose
 // chrome is not a literal per-line prefix (a frame, a hanging gutter) can still
 // answer a width, and the model never has to measure chrome it did not compose.
+//
+// FooterHeight exists for the same reason in the other direction: the core
+// budgets the viewport's height by subtracting the footer, and Footer emits
+// anywhere from one row (the help line alone) to seven (new-output marker,
+// error line, four job-status rows). A fixed guess makes an over-tall frame,
+// which on the alt screen scrolls the header off the top. It must agree with
+// Footer exactly, for the same ViewState and width.
 type Presenter interface {
 	Caps() Caps
 	Header(v ViewState) string
@@ -32,4 +39,5 @@ type Presenter interface {
 	Reasoning(v ViewState, w int) string
 	Dialog(d Dialog, w int) string
 	Footer(v ViewState, w int) string
+	FooterHeight(v ViewState, w int) int
 }

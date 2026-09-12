@@ -303,7 +303,7 @@ func footerRowStyle(kind render.FooterRowKind, text string, w int) string {
 // below the fold), the help/badges line, the error line, and the job-status
 // footer rows — everything that lives between the composer and the bottom of
 // the screen.
-func (presenter) Footer(v render.ViewState, w int) string {
+func (p presenter) Footer(v render.ViewState, w int) string {
 	var b strings.Builder
 	if v.NewOutput {
 		b.WriteString(theme.NewOutputMarker())
@@ -329,4 +329,15 @@ func (presenter) Footer(v render.ViewState, w int) string {
 		b.WriteString("\n" + footerRowStyle(row.Kind, text, w))
 	}
 	return b.String()
+}
+
+// FooterHeight reports how many terminal rows Footer occupies for this
+// ViewState at this width — 1 for the bare help line, up to 7 once the
+// new-output marker, an error line and the four job-status rows are all
+// present. The shared core budgets the viewport against it, so an answer that
+// disagrees with Footer by even one row makes the composed frame overflow the
+// screen. Measuring the real output is the only way the two cannot drift as
+// Phase 3 reshapes this surface's chrome.
+func (p presenter) FooterHeight(v render.ViewState, w int) int {
+	return lipgloss.Height(p.Footer(v, w))
 }

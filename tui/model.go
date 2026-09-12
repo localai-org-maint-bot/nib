@@ -90,7 +90,13 @@ type Model struct {
 	width     int
 	height    int
 	maxHeight int // Configured max height (0 = no limit)
-	loading   bool
+	// footerBudget is how many footer rows the current viewport height was
+	// budgeted against (Presenter.FooterHeight at the time). The footer grows
+	// and shrinks mid-turn as jobs start, loops run and errors come and go, so
+	// syncLayout compares this against the current answer and re-budgets when
+	// they differ — a WindowSizeMsg is not the only thing that changes it.
+	footerBudget int
+	loading      bool
 	// forceFollow makes the next updateViewport scroll to the bottom regardless
 	// of where the user had scrolled to. Set only by user-initiated actions
 	// (sending a message, answering an approval or a question) — passive
@@ -1460,23 +1466,59 @@ func (m Model) resolveApproval(resp chat.ToolCallResponse) (tea.Model, tea.Cmd) 
 	}
 }
 
-// updateDimensions updates component dimensions based on window size
+// updateDimensions re-budgets every component against the current terminal
+// size. The footer's share of that budget is not a constant: Presenter.Footer
+// emits between one row (the help line alone) and seven (new-output marker,
+// error line, and four job-status rows), so it is measured against the very
+// ViewState View will render from rather than guessed.
 func (m *Model) updateDimensions() {
+	m.applyDimensions(m.footerHeight(m.viewState()))
+}
+
+// footerHeight asks the presenter how tall its footer is for this frame.
+func (m Model) footerHeight(vs render.ViewState) int {
+	return m.presenter.FooterHeight(vs, m.width)
+}
+
+// syncLayout re-budgets the viewport when the footer's height has changed
+// since the last budget — a sub-agent job row appearing mid-turn, a loop
+// starting, an error line arriving. Without it the budget only ever moved on
+// a WindowSizeMsg, so a footer that grew by two rows produced a frame taller
+// than the screen: harmless spill into scrollback on the inline widget, but on
+// the alt screen bubbletea scrolls the whole composed frame and the header
+// walks off the top every time a job row appears or disappears.
+func (m *Model) syncLayout(vs render.ViewState) {
+	// Before the first WindowSizeMsg there is no real terminal size to budget
+	// against; updateDimensions owns that first pass.
+	if m.height == 0 {
+		return
+	}
+	if fh := m.footerHeight(vs); fh != m.footerBudget {
+		m.applyDimensions(fh)
+	}
+}
+
+// applyDimensions sizes the components for a footer of footerHeight rows and
+// records what it budgeted for, so syncLayout can tell when that answer goes
+// stale.
+func (m *Model) applyDimensions(footerHeight int) {
 	// Constrain height to maxHeight if set
 	effectiveHeight := m.height
 	if m.maxHeight > 0 && effectiveHeight > m.maxHeight {
 		effectiveHeight = m.maxHeight
 	}
 
-	headerHeight := 2
-	footerHeight := 3 // single-line input + help line + spacing
-	statusHeight := 1
+	headerHeight := 2 // brand/cwd line + hairline
+	// The composer block between the body and the footer: the blank line after
+	// the body, the single-line input, and the blank line before the footer.
+	composerHeight := 3
 
-	vpHeight := effectiveHeight - headerHeight - footerHeight - statusHeight
+	vpHeight := effectiveHeight - headerHeight - composerHeight - footerHeight
 	if vpHeight < 5 {
 		vpHeight = 5
 	}
 
+	m.footerBudget = footerHeight
 	m.viewport.Width = m.width
 	m.viewport.Height = vpHeight
 	m.logVP.Width = m.width
@@ -1806,10 +1848,19 @@ func (m *Model) updateViewport() {
 
 	presenter := m.presenter
 
-	// One ViewState for this pass, shared by every block rendered below —
-	// building it twice would re-run currentDialogs, the footer-row builders
-	// and the message projection for the same frame.
+	// One ViewState for this pass, shared by the layout budget below and the
+	// Reasoning/Dialog blocks at the end — building it twice would re-run
+	// currentDialogs, the footer-row builders and the message projection for
+	// the same frame.
 	vs := m.viewState()
+
+	// Captured BEFORE syncLayout can shrink m.viewport.Height: AtBottom() is
+	// relative to the current height, so re-budgeting first would make a user
+	// who WAS pinned to the bottom read as scrolled-up (the same ordering
+	// hazard the WindowSizeMsg handler guards against).
+	wasAtBottom := m.viewport.AtBottom() || m.forceFollow
+	m.forceFollow = false
+	m.syncLayout(vs)
 
 	// Calculate available width for content (use viewport width, not terminal width)
 	contentWidth := m.viewport.Width
@@ -1904,10 +1955,9 @@ func (m *Model) updateViewport() {
 	}
 
 	// Preserve the user's scroll position: only follow to the bottom when they
-	// were already there. Otherwise a re-render (spinner tick, status update,
-	// streamed token) would yank them back down while they're reading history.
-	wasAtBottom := m.viewport.AtBottom() || m.forceFollow
-	m.forceFollow = false
+	// were already there (captured at the top of this function). Otherwise a
+	// re-render (spinner tick, status update, streamed token) would yank them
+	// back down while they're reading history.
 	offset := m.viewport.YOffset
 	m.viewport.SetContent(sb.String())
 	if wasAtBottom {
