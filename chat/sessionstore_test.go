@@ -3,6 +3,7 @@ package chat
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -411,10 +412,15 @@ func TestSessionStorePruneNeverDeletesTheExemptSession(t *testing.T) {
 
 // TestSessionStorePruneSkipsCorruptFile proves a malformed session file does
 // not block a prune pass (mirroring TestSessionStoreListSkipsCorruptFile for
-// List): Save must still succeed and still prune the well-formed files down
-// to cap despite an unparseable one sitting in the directory. prune never
-// parses JSON (it sorts by file mtime, not content — see its doc comment),
-// so this also pins that contract from the outside.
+// List): Save must still succeed AND still actually prune down to cap despite
+// an unparseable file sitting in the directory. prune never parses JSON (it
+// sorts by file mtime, not content — see its doc comment) and treats a
+// ".json" file as a candidate regardless of whether it parses, so with
+// MaxSessions=1 the pre-existing corrupt.json is exactly the one file prune
+// has budget to keep beyond keepID — asserting Save's error alone (the
+// original form of this test) passes whether prune deleted everything,
+// nothing, or just the corrupt file, since Save swallows every prune outcome
+// by design. Asserting which files remain on disk closes that gap.
 func TestSessionStorePruneSkipsCorruptFile(t *testing.T) {
 	dir := t.TempDir()
 	store := NewSessionStore(dir)
@@ -426,6 +432,26 @@ func TestSessionStorePruneSkipsCorruptFile(t *testing.T) {
 
 	if err := store.Save(SessionRecord{ID: "current", Cwd: "/p"}); err != nil {
 		t.Fatalf("Save returned an error because of an unrelated corrupt file: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "current.json")); err != nil {
+		t.Errorf("current.json (keepID, just saved) should remain: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "corrupt.json")); !os.IsNotExist(err) {
+		t.Errorf("corrupt.json should have been pruned (MaxSessions=1 leaves no budget beyond keepID), stat err = %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var jsonFiles []string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") {
+			jsonFiles = append(jsonFiles, e.Name())
+		}
+	}
+	if len(jsonFiles) != 1 || jsonFiles[0] != "current.json" {
+		t.Errorf("want exactly [current.json] left, got %v", jsonFiles)
 	}
 }
 
