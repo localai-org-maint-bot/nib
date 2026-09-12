@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -530,5 +531,81 @@ func TestStreamingAssistantContentRendersPlainUntilFinalized(t *testing.T) {
 	done := next.(Model)
 	if out := done.viewport.View(); strings.Contains(out, "**bold**") {
 		t.Fatalf("finalized viewport still shows raw markdown markers (glamour not applied): %q", out)
+	}
+}
+
+// TestStaleContentDeltaAcrossToolCallDoesNotFabricateBubble reproduces the
+// orphan-bubble bug found in review: m.loading alone does not guard the
+// window it needs to. m.loading is a single session-wide bool that turn N+1
+// flips back to true as soon as it dispatches, independent of whether turn
+// N's own trailing deltas have finished draining — so a stale turn-N delta
+// sails through the loading guard once turn N+1 is under way.
+//
+// Because responseMsg already cleared streamingActive when turn N ended,
+// that stale delta fabricates a brand-new bubble (appendStreamedContent sees
+// no live streaming target and starts one). If turn N+1 then streams
+// straight into it, responseMsg's reconciliation overwrites it wholesale —
+// harmless. But if a TOOL CALL lands first (a real "tool" transcript entry,
+// appended via appendMessage — which clears streamingActive as its own side
+// effect), the bogus bubble is orphaned: it is no longer the tail once
+// responseMsg reconciles turn N+1's own (separate) streaming message, so it
+// is never touched, never cleaned up, and persists in the transcript
+// (autosaved) as a permanent, misattributed fabricated entry.
+//
+// The fix: reasoningEvent carries the turn generation it was stamped with
+// at OnStream enqueue time (turnGen, bumped once per real turn dispatch in
+// sendMessage/sendWithAttachmentsCmd); Update drops a delta whose gen
+// doesn't match the CURRENT generation before it ever reaches
+// appendStreamedContent, so a stale turn-N delta arriving during turn N+1
+// never creates anything at all.
+func TestStaleContentDeltaAcrossToolCallDoesNotFabricateBubble(t *testing.T) {
+	m := Model{
+		viewport:  viewport.New(80, 20),
+		width:     80,
+		loading:   true,
+		presenter: testPresenter(),
+		turnGen:   new(atomic.Int32), // turn N's dispatch left this at generation 0
+	}
+
+	// Turn N streams and ends normally (gen 0).
+	next, _ := m.Update(reasoningEventsMsg{{kind: reasoningEventContentDelta, text: "turn one reply", gen: 0}})
+	next, _ = next.(Model).Update(responseMsg{content: "turn one reply"})
+	cur := next.(Model)
+	if cur.loading {
+		t.Fatal("setup: turn one should have ended")
+	}
+
+	// Turn N+1 dispatches for real, through the actual production bump path
+	// (sendMessage), the same way dispatchResolved's KindSend branch would —
+	// without invoking the returned Cmd itself, which needs a live session;
+	// the bump happens synchronously before that Cmd ever runs.
+	cur.loading = true
+	_ = cur.sendMessage("question two")
+
+	// A STALE delta from turn N (still tagged gen 0) arrives late — after
+	// turn N ended AND after turn N+1 has already started loading. This is
+	// exactly the window m.loading alone cannot close.
+	next, _ = cur.Update(reasoningEventsMsg{{kind: reasoningEventContentDelta, text: "STALE TAIL", gen: 0}})
+	cur = next.(Model)
+
+	// A tool call/result lands mid turn N+1, as it would for a real
+	// multi-step turn — any transcript append here orphans a fabricated
+	// bubble under the old code.
+	cur.appendMessage(ChatMessage{Role: "tool", Content: "tool ran"})
+
+	// Turn N+1's own real reply streams in (gen 1) and finishes.
+	next, _ = cur.Update(reasoningEventsMsg{{kind: reasoningEventContentDelta, text: "turn two reply", gen: 1}})
+	next, _ = next.(Model).Update(responseMsg{content: "turn two reply"})
+	cur = next.(Model)
+
+	got := assistantMessages(cur)
+	want := []string{"turn one reply", "turn two reply"}
+	if len(got) != len(want) {
+		t.Fatalf("assistant messages = %+v, want %+v (a stale turn-N delta fabricated an orphaned bubble)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("assistant messages = %+v, want %+v", got, want)
+		}
 	}
 }

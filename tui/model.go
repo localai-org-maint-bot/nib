@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mudler/nib/theme"
@@ -54,18 +55,43 @@ func (m *Model) appendMessage(msgs ...ChatMessage) {
 	m.messages = append(m.messages, msgs...)
 }
 
+// bumpTurnGen marks the start of a genuinely new turn dispatch (see
+// turnGen's doc) — called from sendMessage/sendWithAttachmentsCmd,
+// synchronously, before either returns its Cmd. A nil turnGen (a bare
+// Model{} literal in a test not exercising generations) makes this a no-op
+// rather than a panic.
+func (m Model) bumpTurnGen() {
+	if m.turnGen != nil {
+		m.turnGen.Add(1)
+	}
+}
+
+// currentTurnGen reads turnGen, defaulting to 0 when nil (see bumpTurnGen) —
+// the same default a zero-value reasoningEvent.gen carries, so a test that
+// never sets either one up still compares equal and sees unfiltered delivery.
+func (m Model) currentTurnGen() int32 {
+	if m.turnGen == nil {
+		return 0
+	}
+	return m.turnGen.Load()
+}
+
 // appendStreamedContent applies one live "content" delta (Callbacks.OnStream,
 // via reasoningEventContentDelta) to the transcript: the FIRST delta of a
 // turn starts a new in-progress assistant message, and every delta after that
 // — while streamingActive stays true — appends into that SAME message rather
 // than appending a new one, so the reply grows in place.
 //
-// Guarded on m.loading: a delta arriving with no turn in flight is dropped
-// rather than fabricating a bubble. This is a best-effort guard, not a hard
-// guarantee — reasoningChan's doc explains why content deltas and the events
-// that end a turn (responseMsg, parkMsg) are not synchronized by a channel,
-// only made safe against duplication and, via this guard, against the
-// common shape of a stray post-turn delta.
+// Callers are expected to have already dropped a delta whose gen doesn't
+// match currentTurnGen() (see the reasoningEventsMsg case in Update) — that
+// closes off a stale delta from a turn that already ended arriving during a
+// LATER turn. What's left for the guard here is the narrower window within
+// the SAME generation: a delta for the turn that just ended, arriving after
+// responseMsg/parkMsg already reconciled and cleared streamingActive, but
+// before the NEXT turn has dispatched (so turnGen hasn't moved yet either).
+// m.loading is false in exactly that window, so gating on it drops the
+// delta instead of fabricating a bubble for a turn that is, from Update's
+// perspective, already over.
 func (m *Model) appendStreamedContent(delta string) {
 	if delta == "" || !m.loading {
 		return
@@ -173,6 +199,30 @@ type Model struct {
 	// unaffected — they ride wakeupGen — so a real reminder scheduled during
 	// background work still fires. See the parkMsg resume branch / wakeupFireMsg.
 	pollGen int
+	// turnGen is the same invalidate-stale-async-work idiom as wakeupGen/
+	// pollGen above, applied to reasoningChan's delta events (reasoningEvent-
+	// Delta and reasoningEventContentDelta): each is stamped with the CURRENT
+	// generation at the moment OnStream enqueues it, and Update drops one
+	// whose gen doesn't match — it belongs to a turn that has already ended,
+	// with a new one now in flight.
+	//
+	// It has to be pointer-backed, unlike wakeupGen/pollGen: those are only
+	// ever bumped and compared from inside Update, all on the SAME evolving
+	// Model value. OnStream's closure, by contrast, is built once in
+	// initSession (session lifetime) and closes over whatever Model snapshot
+	// existed then; a plain int field on it would never see a later Update
+	// copy's bump. A pointer is the one thing every copy — the frozen
+	// initSession snapshot included — still shares, the same reason
+	// reasoningChan itself works as a hand-off despite value-receiver Update.
+	//
+	// Bumped exactly where a new turn actually dispatches: sendMessage and
+	// sendWithAttachmentsCmd (see bumpTurnGen), synchronously, before either
+	// returns its Cmd — so the bump happens-before that Cmd's goroutine ever
+	// runs, which is happens-before any OnStream call the NEW turn produces.
+	// Injecting into an already-live parked run (releaseQueueFront) does NOT
+	// bump it: that's the same underlying SendMessage call continuing, not a
+	// new turn.
+	turnGen *atomic.Int32
 	// selfPaced counts active self-paced loops (for the footer). 0 or 1 in
 	// practice. Incremented on /loop <prompt>; reset to 0 by /loop stop. Note: it
 	// is NOT auto-cleared when a self-paced loop ends naturally (the TUI has no
@@ -419,9 +469,16 @@ const (
 // reasoningEvent is one item read off reasoningChan. The kinds are handled
 // with different precedence in Update — see reasoningResetPending (for the
 // two reasoning kinds) and streamingActive (for reasoningEventContentDelta).
+//
+// gen is the turn generation (Model.turnGen) that was current at the moment
+// OnStream enqueued this event — see turnGen's doc. Only reasoningEventDelta
+// and reasoningEventContentDelta are checked against it; a mismatch means
+// this event belongs to a turn that has already ended and a later one is now
+// in flight, and Update drops it rather than applying it.
 type reasoningEvent struct {
 	kind reasoningEventKind
 	text string
+	gen  int32
 }
 
 // reasoningEventsMsg carries one or more reasoningEvent values, in the exact
@@ -510,6 +567,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		agentEventChan:     make(chan chat.AgentEvent, 16),
 		statusChan:         make(chan string, 10),
 		reasoningChan:      make(chan reasoningEvent, 256),
+		turnGen:            new(atomic.Int32),
 		toolRequestChan:    make(chan chat.ToolCallRequest),
 		toolResponseChan:   make(chan chat.ToolCallResponse),
 		toolResultChan:     make(chan chat.ToolResult, 64),
@@ -568,7 +626,13 @@ func (m Model) initSession() tea.Cmd {
 			// why dropping a boundary event is a real correctness bug here,
 			// not a harmless "only the latest matters" case.
 			OnReasoning: func(reasoning string) {
-				m.reasoningChan <- reasoningEvent{kind: reasoningEventBoundary, text: reasoning}
+				// gen is carried for consistency with the other reasoningChan
+				// sends below (same field, same call), but reasoningEventBoundary
+				// is not gen-checked in Update: unlike a delta, a stale boundary
+				// only ever overwrites m.reasoning with a complete (if outdated)
+				// block, and responseMsg already resets that unconditionally at
+				// every turn end — the same tolerance Task 23 established.
+				m.reasoningChan <- reasoningEvent{kind: reasoningEventBoundary, text: reasoning, gen: m.currentTurnGen()}
 			},
 			// OnStream opts the session into cogito's streaming path so the
 			// thinking box AND the assistant's reply both fill progressively
@@ -591,11 +655,20 @@ func (m Model) initSession() tea.Cmd {
 			// all from one goroutine, so one channel is what makes Update
 			// observe them in that same order.
 			OnStream: func(ev chat.StreamEvent) {
+				// Stamped with whatever generation is CURRENT right now, at
+				// enqueue time — not read later by Update, which would be
+				// racy against the exact problem this exists to prevent. This
+				// read happens-before SendMessage returns (same goroutine),
+				// which happens-before responseMsg reaches Update, which is
+				// the only place turnGen next moves — so a mismatch Update
+				// later sees is real staleness, not a race on the read
+				// itself. See turnGen's doc.
+				gen := m.currentTurnGen()
 				switch ev.Kind {
 				case "reasoning":
-					m.reasoningChan <- reasoningEvent{kind: reasoningEventDelta, text: ev.Content}
+					m.reasoningChan <- reasoningEvent{kind: reasoningEventDelta, text: ev.Content, gen: gen}
 				case "content":
-					m.reasoningChan <- reasoningEvent{kind: reasoningEventContentDelta, text: ev.Content}
+					m.reasoningChan <- reasoningEvent{kind: reasoningEventContentDelta, text: ev.Content, gen: gen}
 				}
 			},
 			OnToolCall: func(req chat.ToolCallRequest) chat.ToolCallResponse {
@@ -1396,12 +1469,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// over rather than append (see reasoningResetPending's doc).
 				m.reasoningResetPending = true
 			case reasoningEventDelta:
+				// A delta stamped with an older generation than the one
+				// currently in flight belongs to a turn that has already
+				// ended — a new one is running now. Drop it rather than
+				// resuming/appending onto a trace that isn't this turn's.
+				// See turnGen's doc.
+				if ev.gen != m.currentTurnGen() {
+					continue
+				}
 				if m.reasoningResetPending {
 					m.reasoning = ""
 					m.reasoningResetPending = false
 				}
 				m.reasoning += ev.text
 			case reasoningEventContentDelta:
+				// Same staleness check as reasoningEventDelta above, and for
+				// the same reason — but here a stale delta wouldn't just show
+				// wrong text in a box that resets next turn, it would
+				// fabricate a whole new transcript entry (see
+				// appendStreamedContent's doc and the orphan-bubble test).
+				if ev.gen != m.currentTurnGen() {
+					continue
+				}
 				m.appendStreamedContent(ev.text)
 			}
 		}
@@ -1686,8 +1775,12 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 	}
 }
 
-// sendMessage sends a message to the AI
+// sendMessage sends a message to the AI. bumpTurnGen runs synchronously here
+// — before the Cmd below is ever executed by bubbletea — marking this as a
+// genuinely NEW turn (see turnGen's doc) so any reasoningChan event a LATER
+// turn's OnStream stamps is distinguishable from a straggler out of this one.
 func (m Model) sendMessage(text string) tea.Cmd {
+	m.bumpTurnGen()
 	return func() tea.Msg {
 		response, err := m.session.SendMessage(text)
 		return responseMsg{content: response, err: err}
@@ -1696,7 +1789,9 @@ func (m Model) sendMessage(text string) tea.Cmd {
 
 // sendWithAttachmentsCmd sends a message with staged + inline @path attachments.
 // Blocked entries and clear-on-success are handled in the responseMsg handler.
+// bumpTurnGen: see sendMessage's doc.
 func (m Model) sendWithAttachmentsCmd(text string, files []string, overrides map[string]attachments.Override) tea.Cmd {
+	m.bumpTurnGen()
 	return func() tea.Msg {
 		reply, blocked, err := m.session.SendWithAttachments(m.ctx, text, files, overrides)
 		return responseMsg{content: reply, err: err, blocked: blocked}
