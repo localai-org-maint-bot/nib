@@ -53,6 +53,9 @@ func TestCapsAreInlineWidgetCaps(t *testing.T) {
 	if c.Mouse {
 		t.Error("the inline widget does not enable mouse reporting")
 	}
+	if c.OverlayDialogs {
+		t.Error("the inline widget stacks dialogs into the scrollback, it does not overlay them")
+	}
 }
 
 // TestFooterRowsStyledByKind pins the styling this task's review caught

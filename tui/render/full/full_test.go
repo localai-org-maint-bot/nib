@@ -53,6 +53,9 @@ func TestCapsAreFullScreenCaps(t *testing.T) {
 	if !c.Mouse {
 		t.Error("the full-screen presenter must enable mouse reporting")
 	}
+	if !c.OverlayDialogs {
+		t.Error("the full-screen presenter must overlay dialogs from Frame, not rely on them being baked into body")
+	}
 }
 
 // TestFooterRowsStyledByKind pins the styling this task's review caught

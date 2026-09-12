@@ -801,3 +801,50 @@ func TestAllPresentersMarkDialogSelection(t *testing.T) {
 		})
 	}
 }
+
+// TestFrameOverlaysDialogsOnlyWhereDeclared: Phase 3 Task 11 lets `full` place
+// v.Dialogs itself, as a real overlay, instead of relying on them having been
+// baked into body — this is the one place inline and full are SUPPOSED to
+// diverge (chrome: WHERE a dialog reaches the screen), and this test is the
+// guard that the divergence is exactly this and nothing more.
+//
+// A presenter that declares Caps.OverlayDialogs (full) must place v.Dialogs
+// somewhere in Frame's output — body here deliberately carries none of the
+// dialog's own text, so if Frame doesn't do it, nobody does, and the ask
+// dialog silently vanishes on that surface. A presenter that does NOT declare
+// it (inline) must NOT also render one from Frame: production always bakes it
+// into body first (updateViewport, tui/model.go) for that surface, so a
+// second render here would be an outright duplicate on screen. Both body and
+// composer must still survive regardless — the divergence is additive, not a
+// replacement for the rest of Frame's job (see TestFrameContainsEveryPiece).
+func TestFrameOverlaysDialogsOnlyWhereDeclared(t *testing.T) {
+	const w, h = 60, 40
+	v := render.ViewState{
+		Width: w, Height: h, Brand: "nib", Cwd: "~/src/project",
+		Dialogs: []render.Dialog{{
+			Kind:    render.DialogAsk,
+			Title:   "OVERLAY-MARKER-QUESTION",
+			Options: []render.DialogOption{{Text: "OVERLAY-MARKER-OPTION"}},
+		}},
+	}
+	body := "BODY-ONLY-CONTENT"
+	composer := "COMPOSER-MARKER"
+
+	for name, p := range presenters() {
+		t.Run(name, func(t *testing.T) {
+			header := p.Header(v)
+			footer := p.Footer(v, w)
+			out := p.Frame(v, header, body, composer, footer, w, h)
+
+			assertPreserves(t, name, out, []string{"BODY-ONLY-CONTENT", "COMPOSER-MARKER"})
+
+			hasDialog := strings.Contains(out, "OVERLAY-MARKER-QUESTION") || strings.Contains(out, "OVERLAY-MARKER-OPTION")
+			switch overlays := p.Caps().OverlayDialogs; {
+			case overlays && !hasDialog:
+				t.Errorf("%s declares OverlayDialogs but Frame did not place v.Dialogs: %q", name, out)
+			case !overlays && hasDialog:
+				t.Errorf("%s does not declare OverlayDialogs, but Frame rendered v.Dialogs anyway — production already bakes it into body for this surface, so this would double it: %q", name, out)
+			}
+		})
+	}
+}

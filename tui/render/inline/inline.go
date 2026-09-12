@@ -25,7 +25,12 @@ func New() render.Presenter {
 }
 
 func (presenter) Caps() render.Caps {
-	return render.Caps{AltScreen: false, Mouse: false}
+	// OverlayDialogs is false: this surface lives in the normal scrollback, so
+	// a dialog is content like any other — updateViewport appends it into the
+	// same builder it feeds the viewport, and it scrolls away with history
+	// exactly as every other message does. See full.Caps for the surface that
+	// overlays instead.
+	return render.Caps{AltScreen: false, Mouse: false, OverlayDialogs: false}
 }
 
 // prefixed lays out a block as `prefix + first line`, with continuation lines

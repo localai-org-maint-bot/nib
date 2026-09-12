@@ -6,6 +6,16 @@ package render
 type Caps struct {
 	AltScreen bool
 	Mouse     bool
+	// OverlayDialogs is true for a surface whose Frame places v.Dialogs itself
+	// (as a real overlay composed fresh every frame) rather than relying on
+	// them having been baked into body as scrollback content. It is a
+	// separate concern from AltScreen — "owns the screen" and "overlays
+	// dialogs" are not the same thing, and a future alt-screen surface could
+	// still choose to stack — so the shared core must not infer one from the
+	// other: it uses OverlayDialogs to decide whether to also append Dialog
+	// output into the scrollback it feeds the viewport, which would otherwise
+	// render every pending dialog twice on a surface that overlays.
+	OverlayDialogs bool
 }
 
 // Presenter renders a ViewState (and its parts) into strings for one surface
@@ -73,18 +83,18 @@ type Caps struct {
 // them) for what it carries that isn't captured in any one piece: v.Dialogs,
 // so a surface that owns the whole screen can place a dialog as a real
 // overlay on top of body instead of it being baked into body as scrollback
-// content. That is not exercised yet — in this task both presenters still
-// stack, and Dialog output still reaches body the same way it always has, via
-// the core's existing per-message rendering loop — but the shape has to admit
-// it now, since three later features (a collapsible reasoning panel, a
-// selectable ask_user dialog, a /resume picker) all need to place a panel or
-// overlay Frame is the only method with the (w, h) budget and the composed
-// pieces to place it against.
+// content. Phase 3 Task 11 (the ask_user dialog) is the first to exercise
+// this: full.Frame now places v.Dialogs itself (docked above the composer —
+// see its doc comment for why not centred), and Caps.OverlayDialogs tells the
+// shared core to stop also baking them into body's scrollback for that
+// surface, so they render exactly once. A later /resume picker follows the
+// same shape.
 //
-// A presenter that stacks (inline, and full for now) concatenates the four
-// pieces in the order they always rendered in. A presenter that owns the
-// screen may frame body in a box sized to (w, h) and place a dialog over it
-// once there is a dialog worth overlaying.
+// A presenter that stacks (inline) concatenates the four pieces in the order
+// they always rendered in, and relies on the core having already rendered
+// v.Dialogs into body via its per-message loop. A presenter that owns the
+// screen and declares Caps.OverlayDialogs (full) instead renders v.Dialogs
+// itself inside Frame, since the core skips that append for it.
 type Presenter interface {
 	Caps() Caps
 	Header(v ViewState) string

@@ -2162,9 +2162,20 @@ func (m *Model) updateViewport() {
 	// zero or one, but a background sub-agent's tool approval and a
 	// foreground ask_user question can both be pending at once — see
 	// currentDialogs — and the original hand-rolled code rendered both).
+	//
+	// A surface that declares Caps.OverlayDialogs (full) places v.Dialogs
+	// itself, fresh every frame, from Frame — see full.Frame's doc comment.
+	// Appending it here too would render every pending dialog twice: once
+	// baked into this scrollback (which View's Frame call passes through as
+	// body, indistinguishable from any other transcript text by the time
+	// Frame runs) and once more as that surface's own overlay. A surface that
+	// does not declare it (inline) has no other place a dialog reaches the
+	// screen, so this append is still its only path.
 	sb.WriteString(presenter.Reasoning(vs, contentWidth))
-	for _, d := range vs.Dialogs {
-		sb.WriteString(presenter.Dialog(d, contentWidth))
+	if !presenter.Caps().OverlayDialogs {
+		for _, d := range vs.Dialogs {
+			sb.WriteString(presenter.Dialog(d, contentWidth))
+		}
 	}
 
 	// Preserve the user's scroll position: only follow to the bottom when they
