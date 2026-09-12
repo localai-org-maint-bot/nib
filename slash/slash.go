@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
 )
 
@@ -140,7 +141,7 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 			off := false
 			return Action{Kind: KindYolo, YoloOn: &off}
 		default:
-			return Action{Kind: KindError, Err: "usage: /yolo [on|off]"}
+			return Action{Kind: KindError, Err: theme.YoloUsage}
 		}
 	case "goal":
 		return resolveGoal(rest)

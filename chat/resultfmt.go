@@ -220,7 +220,7 @@ func fmtBashResult(v any) string {
 	}
 	if succ, isBool := m["success"].(bool); isBool && !succ {
 		ec, _ := m["exit_code"].(float64)
-		return fmt.Sprintf("(exit %d, no output)", int(ec))
+		return fmt.Sprintf(theme.ToolResultNoOutput, int(ec))
 	}
 	return ""
 }

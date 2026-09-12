@@ -89,6 +89,36 @@ const (
 	HelpResume     = "up/down move · pgup/pgdn page · enter resume · esc cancel"
 	ResumeEmpty    = "no recorded sessions here · /resume --all to look wider"
 	ResumeRestored = "restored session · %d messages"
+
+	// YoloUsage is the /yolo slash command's usage error, shown when the
+	// argument after "yolo" is neither empty, "on" nor "off".
+	YoloUsage = "usage: /yolo [on|off]"
+
+	// Built-in `/` completion entries (tui/completion.go's buildCompItems).
+	// Name is the verb shown, matched against the typed query, and used to
+	// build the option's Insert token; Desc is the one-line summary shown
+	// beside it in the popup.
+	CompLoopName    = "loop"
+	CompLoopDesc    = "recurring or self-paced task"
+	CompCompactName = "compact"
+	CompCompactDesc = "compact the conversation"
+	CompGoalName    = "goal"
+	CompGoalDesc    = "set a goal nib checks before stopping"
+	CompModelName   = "model"
+	CompModelDesc   = "switch the session model"
+	CompModelsName  = "models"
+	CompModelsDesc  = "list the models this endpoint serves"
+	CompAttachName  = "attach"
+	CompAttachDesc  = "stage a file for the next message"
+	CompYoloName    = "yolo"
+	CompYoloDesc    = "toggle (or on/off) auto-approve every tool call"
+	CompResumeName  = "resume"
+	CompResumeDesc  = "resume a recorded session"
+
+	// ToolResultNoOutput is fmtBashResult's (chat/resultfmt.go) fallback for a
+	// failed bash/bash_job_output call whose stdout and stderr were both
+	// empty — a %d format string for the exit code.
+	ToolResultNoOutput = "(exit %d, no output)"
 )
 
 // ReasoningMaxLines is how many trailing lines a collapsed reasoning box

@@ -33,17 +33,17 @@ type compItem struct {
 func buildCompItems(cmds []types.CommandConfig, skills []types.Skill, agents []types.AgentTypeConfig) []compItem {
 	items := make([]compItem, 0, 7+len(cmds)+len(skills)+len(agents))
 	items = append(items,
-		compItem{Cat: compBuiltin, Name: "loop", Desc: "recurring or self-paced task", Insert: "/loop "},
-		compItem{Cat: compBuiltin, Name: "compact", Desc: "compact the conversation", Insert: "/compact "},
-		compItem{Cat: compBuiltin, Name: "goal", Desc: "set a goal nib checks before stopping", Insert: "/goal "},
-		compItem{Cat: compBuiltin, Name: "model", Desc: "switch the session model", Insert: "/model "},
-		compItem{Cat: compBuiltin, Name: "models", Desc: "list the models this endpoint serves", Insert: "/models "},
+		compItem{Cat: compBuiltin, Name: theme.CompLoopName, Desc: theme.CompLoopDesc, Insert: "/" + theme.CompLoopName + " "},
+		compItem{Cat: compBuiltin, Name: theme.CompCompactName, Desc: theme.CompCompactDesc, Insert: "/" + theme.CompCompactName + " "},
+		compItem{Cat: compBuiltin, Name: theme.CompGoalName, Desc: theme.CompGoalDesc, Insert: "/" + theme.CompGoalName + " "},
+		compItem{Cat: compBuiltin, Name: theme.CompModelName, Desc: theme.CompModelDesc, Insert: "/" + theme.CompModelName + " "},
+		compItem{Cat: compBuiltin, Name: theme.CompModelsName, Desc: theme.CompModelsDesc, Insert: "/" + theme.CompModelsName + " "},
 		// skill and agent are deliberately absent: their registries already
 		// contribute one entry per name below, which completes to a usable line,
 		// where a bare "/skill " would complete to a usage error.
-		compItem{Cat: compBuiltin, Name: "attach", Desc: "stage a file for the next message", Insert: "/attach "},
-		compItem{Cat: compBuiltin, Name: "yolo", Desc: "toggle (or on/off) auto-approve every tool call", Insert: "/yolo "},
-		compItem{Cat: compBuiltin, Name: "resume", Desc: "resume a recorded session", Insert: "/resume "},
+		compItem{Cat: compBuiltin, Name: theme.CompAttachName, Desc: theme.CompAttachDesc, Insert: "/" + theme.CompAttachName + " "},
+		compItem{Cat: compBuiltin, Name: theme.CompYoloName, Desc: theme.CompYoloDesc, Insert: "/" + theme.CompYoloName + " "},
+		compItem{Cat: compBuiltin, Name: theme.CompResumeName, Desc: theme.CompResumeDesc, Insert: "/" + theme.CompResumeName + " "},
 	)
 	for _, c := range cmds {
 		items = append(items, compItem{Cat: compCmd, Name: c.Name, Desc: c.Description, Insert: "/" + c.Name + " "})
