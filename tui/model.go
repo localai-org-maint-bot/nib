@@ -24,6 +24,7 @@ import (
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/loop"
 	wizmcp "github.com/mudler/nib/mcp"
+	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/tui/render"
 )
@@ -183,6 +184,34 @@ type Model struct {
 	parkChan        chan parkEvent // park/resume signals from the live run
 	compactChan     chan [2]int    // {before, after} token counts from auto-compaction
 	pruneChan       chan [2]int    // {results, freedTokens} from tool-output pruning
+
+	// /resume picker state (Phase 3 Task 15). Set synchronously by
+	// dispatchResolved's KindResume case — unlike ask_user's askMsg, there is
+	// no blocking channel here (a session listing is a local file read, not
+	// something a live session goroutine has to hand back a channel for).
+	// awaitingResume mirrors awaitingAsk's contract: resumeList is nil
+	// whenever it is false, and every call site guards on the pointer rather
+	// than assuming the bool implies it.
+	awaitingResume bool
+	// resumeList holds the live selection state, formatted one row per
+	// resumeSessions entry (see buildResumeDialog / resumeItems). resumeSessions
+	// is the parallel slice of full records resumeList.Selected indexes into —
+	// the list only ever carries display strings, never an id a Presenter
+	// would have to parse back out.
+	resumeList     *render.SelectList
+	resumeSessions []chat.SessionRecord
+
+	// store persists the transcript at every turn boundary and on exit (see
+	// recordSession) and backs /resume's listing. sessionID and sessionTitle
+	// are this conversation's own record key and cached display title;
+	// sessionCreated is stamped once at construction (or copied from a
+	// resumed record) rather than recomputed, so a session's Created date
+	// survives across many autosaves. All three are seeded by NewModel and
+	// overwritten by a successful /resume (see applyResume).
+	store          *chat.SessionStore
+	sessionID      string
+	sessionTitle   string
+	sessionCreated time.Time
 
 	// contextTokens is the current conversation size shown in the footer badge.
 	// Updated after each turn and after compaction; 0 hides the badge.
@@ -359,6 +388,24 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		mdRenderers:        make(map[int]*glamour.TermRenderer),
 		loops:              loop.NewRegistry(),
 		loopsPath:          filepath.Join(".nib", "loops.json"),
+		// Rooted at the per-user BaseDir (~/.config/nib by default, the same
+		// root config.yaml/plugins/skills already use), NOT at the process's
+		// cwd the way loopsPath above is: /resume's cwd filter (chat.Session-
+		// Store.List) only means anything — and --all only has anything to
+		// widen TO — if every project's sessions land in one shared store
+		// that a Cwd field can then filter, rather than each project cwd
+		// getting its own separate, mutually invisible .nib/sessions folder.
+		store:          chat.NewSessionStore(filepath.Join(plugin.BaseDirIn(cfg.BaseDir), "sessions")),
+		sessionID:      cfg.ResumeSessionID,
+		sessionTitle:   cfg.ResumeSessionTitle,
+		sessionCreated: time.Now(),
+	}
+	// A fresh (non-resumed) session mints its own id; a --resume'd one
+	// (cfg.ResumeSessionID set by app.go before the TUI started) keeps the
+	// stored session's own id, so autosaving continues to update that same
+	// file instead of forking a new one.
+	if m.sessionID == "" {
+		m.sessionID = newSessionID()
 	}
 	m.completion.setRegistries(cfg.Commands, cfg.Skills, cfg.Agents)
 	return m
@@ -599,32 +646,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// approval above: up/down move the highlighted option, space toggles a
 		// multi-select check (enter answers — handled in the KeyEnter case
 		// below, since it must also accept the free-text escape hatch). Esc
-		// cancels unconditionally: it is never a character someone types as an
-		// answer, so — unlike the navigation keys — it needs no composer-empty
-		// guard. Navigation only claims a key when the composer is empty,
-		// exactly like G/End elsewhere in this switch, because up/down/space
-		// are also ordinary characters someone might be typing as their answer.
+		// cancels unconditionally via resolveAsk(""). handleListDialogKey (see
+		// tui/resume.go) is the generalized form of this navigation, shared
+		// with the /resume picker below so the two dialogs don't carry two
+		// copies of the same Move/Toggle/Esc wiring.
 		if m.awaitingAsk && m.askList != nil {
-			if msg.Type == tea.KeyEsc {
-				return m.resolveAsk("")
+			if next, cmd, handled := m.handleListDialogKey(msg, m.askList, func(mm Model) (tea.Model, tea.Cmd) { return mm.resolveAsk("") }); handled {
+				return next, cmd
 			}
-			if strings.TrimSpace(m.textarea.Value()) == "" {
-				switch msg.Type {
-				case tea.KeyUp:
-					m.askList.Move(-1)
-					m.updateViewport()
-					return m, nil
-				case tea.KeyDown:
-					m.askList.Move(1)
-					m.updateViewport()
-					return m, nil
-				case tea.KeySpace:
-					if m.askList.MultiSelect {
-						m.askList.Toggle()
-						m.updateViewport()
-						return m, nil
-					}
-				}
+		}
+		// /resume is the same keyboard-driven list idiom as ask_user above,
+		// minus the free-text escape hatch: a session picked from a list has
+		// no meaningful typed alternative, so unlike ask_user this fully
+		// resolves Enter right here rather than deferring to the KeyEnter
+		// case, and swallows every other key while open (the tool-approval
+		// choice mode above does the same for the same reason — there is
+		// nothing else a keypress could mean while this dialog owns the
+		// screen).
+		if m.awaitingResume && m.resumeList != nil {
+			if next, cmd, handled := m.handleListDialogKey(msg, m.resumeList, func(mm Model) (tea.Model, tea.Cmd) { return mm.cancelResume() }); handled {
+				return next, cmd
+			}
+			if msg.Type == tea.KeyEnter {
+				return m.resolveResumePick()
+			}
+			if msg.Type != tea.KeyCtrlC {
+				return m, nil
 			}
 		}
 		switch msg.Type {
@@ -902,6 +949,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the model never saw them, so re-dispatch them ahead of the queue.
 			m.redispatch = append(m.redispatch, m.session.TakeUndelivered()...)
 		}
+		// Autosave at this turn boundary so /resume never loses more than the
+		// turn in flight when the process exits uncleanly. Save failures are
+		// logged (see recordSession) and never surface here.
+		m.recordSession()
 		m.updateViewport()
 		// The run ended with messages still queued: dispatch them as fresh turns
 		// (resolving slash commands/skills) until one starts a turn or the queue
@@ -1072,7 +1123,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.interruptArmed = false
 			m.status = "Thinking…"
 			m.updateViewport()
-		} else if m.sessionReady && m.session != nil && !m.loading && !m.awaitingApproval && !m.awaitingAsk {
+		} else if m.sessionReady && m.session != nil && !m.loading && !m.awaitingApproval && !m.awaitingAsk && !m.awaitingResume {
 			m.appendMessage(ChatMessage{Role: "user", Content: prompt})
 			m.loading = true
 			m.interruptArmed = false
@@ -1329,6 +1380,8 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		}
 		m.appendMessage(ChatMessage{Role: "agent", Content: notice})
 		return nil
+	case slash.KindResume:
+		return m.startResume(action.ResumeAll, action.ResumeID)
 	case slash.KindAttach:
 		switch action.AttachOp {
 		case slash.AttachStage:
@@ -1748,6 +1801,9 @@ func (m Model) renderComposer(w int) string {
 		// no input: the log viewer owns the body and the keystrokes
 	case m.awaitingApproval && !m.approvalEditing:
 		// no input: choice row lives in the viewport approval block
+	case m.awaitingResume:
+		// no input: unlike ask_user, /resume has no free-text fallback — the
+		// picker lives in the viewport dialog block and swallows every key.
 	default:
 		composer.WriteString(m.textarea.View())
 	}
@@ -1968,6 +2024,9 @@ func (m Model) currentDialogs() []render.Dialog {
 	if m.awaitingAsk && m.pendingAsk != nil {
 		dialogs = append(dialogs, buildAskDialog(*m.pendingAsk, m.askList, m.awaitingApproval))
 	}
+	if m.awaitingResume && m.resumeList != nil {
+		dialogs = append(dialogs, buildResumeDialog(m.resumeList))
+	}
 	return dialogs
 }
 
@@ -2038,7 +2097,7 @@ func (m Model) showingViewport() bool {
 	if m.showLogs {
 		return false
 	}
-	return len(m.messages) > 0 || m.loading || m.awaitingApproval || m.awaitingAsk
+	return len(m.messages) > 0 || m.loading || m.awaitingApproval || m.awaitingAsk || m.awaitingResume
 }
 
 // footerRows builds the job-status footer rows — active sub-agent jobs, shell
@@ -2328,6 +2387,8 @@ func (m Model) helpLine() string {
 		return theme.HelpApproval
 	case m.awaitingAsk:
 		return theme.HelpAsk
+	case m.awaitingResume:
+		return theme.HelpResume
 	case m.parked:
 		return "enter add a follow-up · ctrl+c interrupt · ctrl+o logs"
 	case strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0:
@@ -2504,6 +2565,11 @@ func (m Model) quit() (tea.Model, tea.Cmd) {
 	m.quitting = true
 	if m.session != nil {
 		m.sessionUsage = m.session.Usage()
+		// Before Close, for the same reason the usage refresh is: recordSession
+		// reads through m.session (ExportHistory), so it must run while the
+		// session is still live. A save failure here is logged and never blocks
+		// exit — see recordSession's doc comment.
+		m.recordSession()
 		m.session.Close()
 	}
 	m.cancel()

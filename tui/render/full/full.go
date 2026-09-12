@@ -286,15 +286,19 @@ func dialogAskMarker(d render.Dialog, i int) string {
 // checkbox per dialogAskMarker, the row text in theme.ApproveKey when
 // highlighted and theme.Help otherwise (mirroring DialogApproval's Emphasis
 // styling) — and Hint beneath, wrapped. An ask with no options (free-text
-// only) degrades to placing Title alone, same as before this task. This
-// mirrors inline byte-for-byte, same precedent as the rest of this file — the
-// conformance suite enforces it. DialogApproval lays out Rows (the argument
-// card, or — when RowsUnstructured — a single wrapped prose block), Hint (the
-// captured reasoning, wrapped) and Options (the choice menu, one line per
-// option styled per its Emphasis).
+// only) degrades to placing Title alone, same as before this task.
+// DialogResume (Phase 3 Task 15, the /resume picker) shares this exact
+// branch: buildResumeDialog (tui/resume.go) produces the same Title +
+// single-select Options + Hint shape buildAskDialog does, so there is
+// nothing for a Presenter to render differently. This mirrors inline
+// byte-for-byte, same precedent as the rest of this file — the conformance
+// suite enforces it. DialogApproval lays out Rows (the argument card, or —
+// when RowsUnstructured — a single wrapped prose block), Hint (the captured
+// reasoning, wrapped) and Options (the choice menu, one line per option
+// styled per its Emphasis).
 func (presenter) Dialog(d render.Dialog, w int) string {
 	switch d.Kind {
-	case render.DialogAsk:
+	case render.DialogAsk, render.DialogResume:
 		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
 		var b strings.Builder
 		b.WriteString(gutter + theme.LabelNib.Render(d.Title))

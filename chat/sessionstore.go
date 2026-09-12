@@ -27,9 +27,15 @@ type SessionRecord struct {
 }
 
 // SessionStore persists SessionRecords as one JSON file per session under
-// Dir — the same `.nib/` convention loop.Registry already uses for
-// loops.json (see tui/model.go's loopsPath). Dir is created on first Save;
-// List and Load tolerate it not existing yet.
+// Dir. The caller picks Dir; the TUI (tui/model.go's NewModel) and the
+// --resume flag (app/app.go's applyResumeFlag) both root it at the per-user
+// BaseDir (~/.config/nib/sessions by default) rather than the process's cwd
+// the way loop.Registry's loops.json is — cwd-relative would put every
+// project's sessions in a different, mutually invisible folder, which
+// defeats /resume --all (there would be nothing outside the current folder
+// to widen to) and makes the Cwd field below pointless (every session in one
+// folder would share the same Cwd by construction). Dir is created on first
+// Save; List and Load tolerate it not existing yet.
 type SessionStore struct{ Dir string }
 
 // NewSessionStore returns a store rooted at dir. dir is not created until the

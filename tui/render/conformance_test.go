@@ -559,13 +559,39 @@ func hasMenuLeadIn(out string, options, tokens []string) bool {
 }
 
 // TestUnknownDialogKindRendersNothing: a kind no presenter handles must produce
-// nothing on every surface, not a half-drawn card on one of them.
+// nothing on every surface, not a half-drawn card on one of them. DialogResume
+// is deliberately NOT used here any more (Phase 3 Task 15 gave it a real
+// rendering, shared with DialogAsk — see TestResumeDialogRendersLikeAsk
+// below); an out-of-range Kind stands in as the genuinely-unhandled case.
 func TestUnknownDialogKindRendersNothing(t *testing.T) {
+	unhandled := render.DialogKind(99)
 	for name, p := range presenters() {
-		if out := p.Dialog(render.Dialog{Kind: render.DialogResume, Title: "resume?"}, 60); out != "" {
-			t.Errorf("%s rendered %q for DialogResume, want empty", name, out)
+		if out := p.Dialog(render.Dialog{Kind: unhandled, Title: "resume?"}, 60); out != "" {
+			t.Errorf("%s rendered %q for an unhandled DialogKind, want empty", name, out)
 		}
 	}
+}
+
+// TestResumeDialogRendersLikeAsk pins Task 15's reuse decision: DialogResume
+// is rendered by the exact same branch as DialogAsk (see buildResumeDialog,
+// tui/resume.go), so a /resume picker with options renders structurally
+// identically to an equivalent ask_user dialog — same blocks, same option
+// count, same trailing separator — on both presenters.
+func TestResumeDialogRendersLikeAsk(t *testing.T) {
+	const w = 60
+	options := []render.DialogOption{{Text: "fix the bug · 3m ago · 4 messages"}, {Text: "add tests · 1h ago · 2 messages"}}
+	tokens := []string{"resume a session", options[0].Text, options[1].Text}
+
+	fps := map[string]fingerprint{}
+	for name, p := range presenters() {
+		out := p.Dialog(render.Dialog{Kind: render.DialogResume, Title: "resume a session", Options: options, Selected: 1, Hint: "up/down move · enter resume · esc cancel"}, w)
+		assertPreserves(t, name, out, tokens)
+		if got := optionLines(out, []string{options[0].Text, options[1].Text}); got != 2 {
+			t.Errorf("%s rendered %d option lines, want 2: %q", name, got, out)
+		}
+		fps[name] = fingerprintOf(out, tokens)
+	}
+	assertSameFingerprint(t, fps)
 }
 
 // TestHeaderStructuralEquivalence: the header carries the brand, the cwd and

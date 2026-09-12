@@ -43,6 +43,7 @@ func buildCompItems(cmds []types.CommandConfig, skills []types.Skill, agents []t
 		// where a bare "/skill " would complete to a usage error.
 		compItem{Cat: compBuiltin, Name: "attach", Desc: "stage a file for the next message", Insert: "/attach "},
 		compItem{Cat: compBuiltin, Name: "yolo", Desc: "toggle (or on/off) auto-approve every tool call", Insert: "/yolo "},
+		compItem{Cat: compBuiltin, Name: "resume", Desc: "resume a recorded session", Insert: "/resume "},
 	)
 	for _, c := range cmds {
 		items = append(items, compItem{Cat: compCmd, Name: c.Name, Desc: c.Description, Insert: "/" + c.Name + " "})

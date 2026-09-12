@@ -77,6 +77,18 @@ const (
 	// the usual ask-dialog affordances actually do anything until it resolves
 	// — a silent dead end without this note.
 	AskBlockedByApproval = "waiting on the tool approval above — resolve that first"
+
+	// /resume picker copy (Phase 3 Task 15). ResumeTitle is the dialog's
+	// heading; HelpResume is the footer help line while the picker is open —
+	// no free-text escape hatch here (unlike HelpAsk), since a session id
+	// picked from a list has no meaningful typed alternative. ResumeEmpty is
+	// the notice for a cwd-scoped picker with nothing to show; ResumeRestored
+	// (a %d format string for the message count) confirms a successful
+	// restore.
+	ResumeTitle    = "resume a session"
+	HelpResume     = "up/down move · enter resume · esc cancel"
+	ResumeEmpty    = "no recorded sessions here · /resume --all to look wider"
+	ResumeRestored = "restored session · %d messages"
 )
 
 // ReasoningMaxLines is how many trailing lines a collapsed reasoning box
