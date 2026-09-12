@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
 )
@@ -305,6 +307,37 @@ func TestEnterCompletionModelModelsOtherSelectionCompletes(t *testing.T) {
 	}
 	if len(nm.messages) != 0 {
 		t.Fatalf("completing to a different match must not dispatch, got %+v", nm.messages)
+	}
+}
+
+// TestCompBuiltinNamesMatchSlashResolve ties every theme.Comp*Name constant
+// to the verb string slash.Resolve actually switches on. These are protocol
+// tokens, not copy: CompAttachName and CompResumeName must byte-match
+// slash.Resolve's `case "attach"` / `case "resume"` (slash/slash.go) or
+// completion silently offers a verb slash.Resolve doesn't recognize, and
+// KindError: unknown command %q comes back at Enter with no compile-time
+// signal. Before this test, only six of the eight constants (loop, compact,
+// goal, model, models, yolo) were incidentally pinned by literal Insert
+// assertions elsewhere in this file — attach and resume had no coverage at
+// all. Resolving through the real switch (rather than re-typing the case
+// strings as literals here) means a future rename of the slash.go case or
+// the theme constant breaks this test either way.
+func TestCompBuiltinNamesMatchSlashResolve(t *testing.T) {
+	names := []string{
+		theme.CompLoopName,
+		theme.CompCompactName,
+		theme.CompGoalName,
+		theme.CompModelName,
+		theme.CompModelsName,
+		theme.CompAttachName,
+		theme.CompYoloName,
+		theme.CompResumeName,
+	}
+	for _, name := range names {
+		act := slash.Resolve("/"+name, nil, nil, nil)
+		if act.Kind == slash.KindError && strings.Contains(act.Err, "unknown command") {
+			t.Errorf("theme.Comp*Name %q does not match any slash.Resolve verb: %v", name, act.Err)
+		}
 	}
 }
 
