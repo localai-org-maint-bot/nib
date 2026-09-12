@@ -250,13 +250,9 @@ func (presenter) Header(v render.ViewState) string {
 	if gap < 1 {
 		gap = 1
 	}
-	width := v.Width
-	if width < 1 {
-		width = 1
-	}
 	b.WriteString(left + strings.Repeat(" ", gap) + cwd)
 	b.WriteString("\n")
-	b.WriteString(theme.Rule.Render(strings.Repeat("─", width)))
+	b.WriteString(theme.Hairline(v.Width))
 	b.WriteString("\n")
 	return b.String()
 }
