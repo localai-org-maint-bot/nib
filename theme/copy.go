@@ -4,6 +4,10 @@ package theme
 const (
 	BrandName = "nib"
 
+	// LabelYouText labels the user's own chat messages (paired with LabelYou,
+	// the style, in theme.go).
+	LabelYouText = "you"
+
 	HelpDefault      = "enter send · ctrl+y use command · G/end newest · esc exit"
 	HelpApproval     = "1 once · 2 always · 3 this turn · n no · e edit · esc deny"
 	HelpApprovalEdit = "enter submit · esc cancel"

@@ -6,6 +6,7 @@ import (
 
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/theme"
+	"github.com/mudler/nib/tui/render"
 )
 
 const (
@@ -85,9 +86,11 @@ type agentJob struct {
 
 var jobsFooterStyle = theme.Meta
 
-// renderJobsFooter renders a compact one-line summary of active jobs.
-// Returns "" when there are no jobs so the footer takes no vertical space.
-func renderJobsFooter(jobs []agentJob, width int) string {
+// jobsFooterText builds the plain (unstyled) jobs-footer text — the counts and
+// the background/logs hint — or "" when there are no jobs to report. Shared by
+// renderJobsFooter (styled, directly unit-tested) and jobsFooterRow (plain
+// data for render.FooterRow) so the two can never drift apart.
+func jobsFooterText(jobs []agentJob) string {
 	if len(jobs) == 0 {
 		return ""
 	}
@@ -110,21 +113,34 @@ func renderJobsFooter(jobs []agentJob, width int) string {
 		parts = append(parts, fmt.Sprintf("%d failed", failed))
 	}
 	parts = append(parts, "(ctrl+b background · ctrl+o logs)")
-	line := strings.Join(parts, "  ·  ")
-	return jobsFooterStyle.Width(width).Render(line)
+	return strings.Join(parts, "  ·  ")
 }
 
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
+// renderJobsFooter renders a compact one-line summary of active jobs.
+// Returns "" when there are no jobs so the footer takes no vertical space.
+func renderJobsFooter(jobs []agentJob, width int) string {
+	text := jobsFooterText(jobs)
+	if text == "" {
+		return ""
 	}
-	return id
+	return jobsFooterStyle.Width(width).Render(text)
+}
+
+// jobsFooterRow returns the plain {Glyph, Text} data for the jobs footer (no
+// glyph — the jobs line has never carried one) and whether there is one to
+// show. The presenter styles it.
+func jobsFooterRow(jobs []agentJob) (render.FooterRow, bool) {
+	text := jobsFooterText(jobs)
+	if text == "" {
+		return render.FooterRow{}, false
+	}
+	return render.FooterRow{Text: text}, true
 }
 
 // toolApprovalLabel builds the tool-approval header, labeling sub-agent calls.
 func toolApprovalLabel(req chat.ToolCallRequest) string {
 	if req.AgentID != "" {
-		return fmt.Sprintf("%s %s · %s wants to run", theme.SubAgent, shortID(req.AgentID), req.Name)
+		return fmt.Sprintf("%s %s · %s wants to run", theme.SubAgent, render.ShortID(req.AgentID), req.Name)
 	}
 	return req.Name + " wants to run"
 }
@@ -132,17 +148,19 @@ func toolApprovalLabel(req chat.ToolCallRequest) string {
 // approvalRows builds a render.Dialog's Rows for a tool-approval prompt: the
 // structured argument card when chat.ToolArgRows recognizes the tool (one row
 // per field), or a single fallback row carrying the raw formatted call
-// otherwise. inline.Dialog tells the two apart by that fallback row's empty
-// key — an empty-string key never occurs in a real structured row.
-func approvalRows(req chat.ToolCallRequest) [][2]string {
+// otherwise — reported via the second return value (render.Dialog's
+// RowsUnstructured) rather than an empty-key convention, since chat.ToolArgRows
+// keys come from JSON object keys and a tool emitting a literal "" key would
+// otherwise collide with that convention.
+func approvalRows(req chat.ToolCallRequest) (rows [][2]string, unstructured bool) {
 	if rows, ok := chat.ToolArgRows(req.Name, req.Arguments); ok {
 		out := make([][2]string, len(rows))
 		for i, r := range rows {
 			out[i] = [2]string{r.Key, r.ValueDisplay()}
 		}
-		return out
+		return out, false
 	}
-	return [][2]string{{"", chat.FormatToolCall(req.Name, req.Arguments)}}
+	return [][2]string{{"", chat.FormatToolCall(req.Name, req.Arguments)}}, true
 }
 
 // firstRunningJobID returns the id of the first running job, or "".

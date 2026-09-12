@@ -1551,13 +1551,121 @@ func (m *Model) updateViewportFollow() {
 	m.updateViewport()
 }
 
+// renderer returns the active Presenter. It falls back to inline.New() only
+// for a Model built as a bare struct literal (as many tests do, bypassing
+// NewModel, which always sets presenter) — a real run never reaches the
+// fallback. This is the one place that guard lives; updateViewport and View
+// both call it rather than each carrying their own copy of the nil check.
+func (m Model) renderer() render.Presenter {
+	if m.presenter != nil {
+		return m.presenter
+	}
+	return inline.New()
+}
+
+// roleOf maps a ChatMessage's string Role to a render.Role. agent_tool and
+// agent_result — the sub-agent thread-run lines, always rendered directly by
+// renderAgentThreadRun rather than through Presenter.Message — have no
+// dedicated render.Role of their own; they map to RoleAgent as the closest
+// fit for the ViewState.Messages projection (see viewState). Only that
+// projection reads this mapping for those two roles; the actual rendering
+// loop in updateViewport branches on the raw string before this is ever
+// consulted.
+func roleOf(s string) render.Role {
+	switch s {
+	case "user":
+		return render.RoleUser
+	case "assistant":
+		return render.RoleAssistant
+	case "agent", "agent_tool", "agent_result":
+		return render.RoleAgent
+	case "tool":
+		return render.RoleTool
+	case "error":
+		return render.RoleError
+	}
+	return render.RoleNone
+}
+
+// currentDialog returns the render.Dialog for whichever prompt is pending
+// (tool approval or ask), or nil when neither is. Shared by updateViewport
+// (which renders it) and viewState (which projects it onto ViewState.Dialog
+// so the field is never silently nil for a Presenter reading the whole
+// frame).
+func (m Model) currentDialog() *render.Dialog {
+	switch {
+	case m.awaitingApproval && m.pendingTool != nil:
+		rows, unstructured := approvalRows(*m.pendingTool)
+		var options []render.DialogOption
+		if m.approvalEditing {
+			options = []render.DialogOption{{Text: theme.ApproveEditHint, Emphasis: true}}
+		} else {
+			scope, _ := chat.GrantScope(m.pendingTool.Name, m.pendingTool.Arguments)
+			options = []render.DialogOption{
+				{Text: theme.ApproveOnce, Emphasis: true},
+				{Text: theme.ApproveAlwaysPrefix + scope + theme.ApproveAlwaysSuffix, Emphasis: true},
+				{Text: theme.ApproveTurn, Emphasis: true},
+				{Text: theme.ApproveDenyEdit, Emphasis: false},
+			}
+		}
+		return &render.Dialog{
+			Kind:             render.DialogApproval,
+			Title:            toolApprovalLabel(*m.pendingTool),
+			Rows:             rows,
+			RowsUnstructured: unstructured,
+			Hint:             m.pendingTool.Reasoning,
+			Options:          options,
+		}
+	case m.awaitingAsk && m.pendingAsk != nil:
+		return &render.Dialog{
+			Kind:  render.DialogAsk,
+			Title: renderAsk(*m.pendingAsk, m.width),
+		}
+	}
+	return nil
+}
+
+// viewState builds the full ViewState for the current frame: every field
+// populated from Model state (I1), so a Presenter driven from one ViewState —
+// an alt-screen full-frame compositor, for instance — never finds a field it
+// needs left at its zero value. View additionally sets the viewport-derived
+// Footer fields (Help, Badges, Err, Footers, NewOutput) that only it computes.
+func (m Model) viewState() render.ViewState {
+	status := m.status
+	if status == "" || status == "Thinking..." {
+		status = theme.VerbThinking
+	}
+
+	messages := make([]render.Message, 0, len(m.messages))
+	for _, msg := range m.messages {
+		messages = append(messages, render.Message{
+			Role:      roleOf(msg.Role),
+			Content:   msg.Content,
+			Name:      msg.Name,
+			Arguments: msg.Arguments,
+			AgentID:   msg.AgentID,
+		})
+	}
+
+	return render.ViewState{
+		Width:       m.width,
+		Height:      m.height,
+		Cwd:         shortenPath(currentDir()),
+		Brand:       theme.BrandName,
+		AutoApprove: m.cfg.ApprovalMode == "auto",
+		Loading:     m.loading,
+		Status:      status,
+		Spinner:     m.spinner.View(),
+		Messages:    messages,
+		Reasoning:   render.Reasoning{Text: m.reasoning},
+		Dialog:      m.currentDialog(),
+	}
+}
+
 func (m *Model) updateViewport() {
 	var sb strings.Builder
 
-	presenter := m.presenter
-	if presenter == nil {
-		presenter = inline.New()
-	}
+	presenter := m.renderer()
 
 	// Calculate available width for content (use viewport width, not terminal width)
 	contentWidth := m.viewport.Width
@@ -1597,7 +1705,6 @@ func (m *Model) updateViewport() {
 		switch msg.Role {
 		case "user":
 			sb.WriteString(presenter.Message(render.Message{Role: render.RoleUser, Content: msg.Content}, prevRole, contentWidth))
-			sb.WriteString("\n")
 			prevRole = render.RoleUser
 		case "assistant":
 			// Markdown is width-cached model state (glamour), not something a
@@ -1606,19 +1713,21 @@ func (m *Model) updateViewport() {
 			prefixWidth := lipgloss.Width(assistantStyle.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep) + " ")
 			rendered := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
 			sb.WriteString(presenter.Message(render.Message{Role: render.RoleAssistant, Content: rendered}, prevRole, contentWidth))
-			sb.WriteString("\n")
 			prevRole = render.RoleAssistant
 		case "agent":
 			prefixWidth := lipgloss.Width(theme.Subtle.Render(theme.SubAgent) + " ")
 			rendered := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
-			sb.WriteString(presenter.Message(render.Message{Role: render.RoleAgent, Content: rendered, AgentID: msg.AgentID}, prevRole, contentWidth))
-			// Tighten: a sub-agent lifecycle header hugs its own thread run that
-			// follows (tool lines / result) — omit the blank separator. This
-			// depends on the NEXT raw message, which a Presenter never sees, so
-			// the decision stays here rather than moving into Message.
-			if !m.sameAgentMsg(i+1, msg.AgentID) {
-				sb.WriteString("\n")
-			}
+			sb.WriteString(presenter.Message(render.Message{
+				Role:    render.RoleAgent,
+				Content: rendered,
+				AgentID: msg.AgentID,
+				// Tighten: a sub-agent lifecycle header hugs its own thread run
+				// that follows (tool lines / result) — the Presenter must omit
+				// the blank separator in that case. This depends on the NEXT raw
+				// message, which a Presenter never sees, so the model resolves
+				// it here and carries the answer on the Message value.
+				HugNext: m.sameAgentMsg(i+1, msg.AgentID),
+			}, prevRole, contentWidth))
 			prevRole = render.RoleAgent
 		case "tool":
 			sb.WriteString(presenter.Message(render.Message{
@@ -1628,59 +1737,21 @@ func (m *Model) updateViewport() {
 				Arguments: msg.Arguments,
 				AgentID:   msg.AgentID,
 			}, prevRole, contentWidth))
-			sb.WriteString("\n")
 			prevRole = render.RoleTool
 		case "error":
 			sb.WriteString(presenter.Message(render.Message{Role: render.RoleError, Content: msg.Content}, prevRole, contentWidth))
-			sb.WriteString("\n")
 			prevRole = render.RoleError
 		}
 	}
 
-	if m.loading {
-		displayStatus := m.status
-		if displayStatus == "" || displayStatus == "Thinking..." {
-			displayStatus = theme.VerbThinking
-		}
-		sb.WriteString(presenter.Reasoning(render.Reasoning{
-			Text:    m.reasoning,
-			Status:  displayStatus,
-			Spinner: m.spinner.View(),
-		}, contentWidth))
-	}
-
-	if m.awaitingApproval && m.pendingTool != nil {
-		rows := approvalRows(*m.pendingTool)
-		var hint string
-		if m.pendingTool.Reasoning != "" {
-			hint = m.pendingTool.Reasoning
-		}
-		var options []string
-		if m.approvalEditing {
-			options = []string{theme.ApproveEditHint}
-		} else {
-			scope, _ := chat.GrantScope(m.pendingTool.Name, m.pendingTool.Arguments)
-			options = []string{
-				theme.ApproveOnce,
-				theme.ApproveAlwaysPrefix + scope + theme.ApproveAlwaysSuffix,
-				theme.ApproveTurn,
-				theme.ApproveDenyEdit,
-			}
-		}
-		sb.WriteString(presenter.Dialog(render.Dialog{
-			Kind:    render.DialogApproval,
-			Title:   toolApprovalLabel(*m.pendingTool),
-			Rows:    rows,
-			Hint:    hint,
-			Options: options,
-		}, contentWidth))
-	}
-
-	if m.awaitingAsk && m.pendingAsk != nil {
-		sb.WriteString(presenter.Dialog(render.Dialog{
-			Kind:  render.DialogAsk,
-			Title: renderAsk(*m.pendingAsk, m.width),
-		}, contentWidth))
+	// vs carries everything Reasoning/Dialog need (and, for I1 completeness,
+	// everything Header/Footer need too, even though this function never calls
+	// those). Reasoning renders nothing when !vs.Loading, so the call is
+	// unconditional; Dialog is only called when a dialog is actually pending.
+	vs := m.viewState()
+	sb.WriteString(presenter.Reasoning(vs, contentWidth))
+	if vs.Dialog != nil {
+		sb.WriteString(presenter.Dialog(*vs.Dialog, contentWidth))
 	}
 
 	// Preserve the user's scroll position: only follow to the bottom when they
@@ -1703,21 +1774,14 @@ func (m Model) View() string {
 		return ""
 	}
 
-	presenter := m.presenter
-	if presenter == nil {
-		presenter = inline.New()
-	}
+	presenter := m.renderer()
+	vs := m.viewState()
 
 	var sb strings.Builder
 
 	// Header: brand (plus a yolo badge when the approval gate is off) left,
 	// cwd right, one dim hairline beneath.
-	sb.WriteString(presenter.Header(render.ViewState{
-		Width:       m.width,
-		Brand:       theme.BrandName,
-		Cwd:         shortenPath(currentDir()),
-		AutoApprove: m.cfg.ApprovalMode == "auto",
-	}))
+	sb.WriteString(presenter.Header(vs))
 
 	// Body: log viewer, first-run empty state, otherwise the conversation viewport.
 	showingViewport := false
@@ -1761,26 +1825,34 @@ func (m Model) View() string {
 
 	// Footer: new-output marker (scroll-position signal — content arrived below
 	// the fold while the user was reading history), help/badges line, error
-	// line, and the job footers. Hidden job footers while the log viewer owns
-	// the body.
-	fv := render.ViewState{
-		Width:     m.width,
-		NewOutput: showingViewport && !m.viewport.AtBottom(),
-	}
-	fv.Help = theme.Help.Render(m.helpLine())
-	fv.Badges = m.footerBadges(lipgloss.Width(fv.Help))
+	// line, and the job-status footer rows. Hidden while the log viewer owns
+	// the body. Reuses the same vs Header rendered from (I1): one ViewState per
+	// frame, not two disjoint partial ones.
+	vs.NewOutput = showingViewport && !m.viewport.AtBottom()
+	vs.Help = theme.Help.Render(m.helpLine())
+	vs.Badges = m.footerBadges(lipgloss.Width(vs.Help))
 	if m.err != nil {
-		fv.Err = m.err.Error()
+		vs.Err = m.err.Error()
 	}
 	if !m.showLogs {
-		fv.JobsFooter = renderJobsFooter(m.jobs, m.width)
-		fv.ShellJobsFooter = renderShellJobsFooter(m.shellJobs.List(), m.width)
-		fv.LoopsFooter = renderLoopsFooter(m.loops, m.selfPaced, m.width)
-		if m.session != nil {
-			fv.GoalFooter = renderGoalFooter(m.session.Goal(), m.width)
+		var footers []render.FooterRow
+		if row, ok := jobsFooterRow(m.jobs); ok {
+			footers = append(footers, row)
 		}
+		if row, ok := shellJobsFooterRow(m.shellJobs.List()); ok {
+			footers = append(footers, row)
+		}
+		if row, ok := loopsFooterRow(m.loops, m.selfPaced); ok {
+			footers = append(footers, row)
+		}
+		if m.session != nil {
+			if row, ok := goalFooterRow(m.session.Goal()); ok {
+				footers = append(footers, row)
+			}
+		}
+		vs.Footers = footers
 	}
-	sb.WriteString(presenter.Footer(fv, m.width))
+	sb.WriteString(presenter.Footer(vs, m.width))
 
 	return sb.String()
 }

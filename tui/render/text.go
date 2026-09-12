@@ -107,3 +107,13 @@ func TruncateRunes(word string, width int) string {
 	}
 	return string(runes[:width-1]) + "…"
 }
+
+// ShortID truncates an id to a compact display form (an 8-character prefix).
+// Shared by tui (tool/job labels) and every Presenter (agent-tagged tool
+// labels), so the two never drift apart.
+func ShortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}

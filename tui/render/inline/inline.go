@@ -31,7 +31,7 @@ func (presenter) Caps() render.Caps {
 // prefixed lays out a block as `prefix + first line`, with continuation lines
 // indented to the prefix width. This replaces the four near-identical loops the
 // role switch used to carry.
-func prefixed(prefix, content string, width int) string {
+func prefixed(prefix, content string) string {
 	pw := lipgloss.Width(prefix)
 	var b strings.Builder
 	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
@@ -58,35 +58,45 @@ func styledLines(style lipgloss.Style, content string) string {
 	return strings.Join(lines, "\n")
 }
 
-// shortID truncates an id to a compact display form. Duplicated from
-// tui.shortID (tui/agents.go) rather than exported across the package
-// boundary: it is a trivial, self-contained one-liner and the presenter must
-// not import the tui package (tui imports render; the reverse would cycle).
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
-}
-
-// Message renders one chat entry. assistant/agent content arrives already
+// Message renders one chat entry, including the trailing blank-line separator
+// before the next entry. assistant/agent content arrives already
 // markdown-rendered (and wrapped) by the model — glamour is width-cached state
 // the model owns, not something behind this interface. user/error content
 // arrives raw and is wrapped here.
+//
+// Every role gets an unconditional trailing separator except RoleAgent with
+// HugNext set: an agent lifecycle line whose thread run (rendered separately
+// by the model, never through Message) immediately follows omits it, so the
+// header visually hugs its own run instead of floating a blank line above it.
+// That decision depends on the next RAW message (including agent_tool/
+// agent_result, which Message never sees as a Message value), so the model
+// computes HugNext and carries it on the value rather than Message re-deriving
+// it from prev/Role.
+//
+// prev is accepted (not just for signature symmetry with the Presenter
+// interface) so a different Presenter can vary spacing across role
+// transitions; this implementation's spacing rule never depended on the
+// previous role — it was always "blank after every message, except a hugging
+// agent line" — so branching on prev here would be new behaviour, which a
+// pure extraction must not introduce.
 func (presenter) Message(m render.Message, prev render.Role, w int) string {
+	var body string
 	switch m.Role {
 	case render.RoleUser:
-		prefix := theme.LabelYou.Render("you") + " " + theme.SepStyle.Render(theme.Sep) + " "
+		prefix := theme.LabelYou.Render(theme.LabelYouText) + " " + theme.SepStyle.Render(theme.Sep) + " "
 		wrapped := render.Wrap(m.Content, w-lipgloss.Width(prefix))
-		return prefixed(prefix, wrapped, w)
+		body = prefixed(prefix, wrapped)
 
 	case render.RoleAssistant:
 		prefix := theme.LabelNib.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep) + " "
-		return prefixed(prefix, m.Content, w)
+		body = prefixed(prefix, m.Content)
 
 	case render.RoleAgent:
 		prefix := theme.Subtle.Render(theme.SubAgent) + " "
-		return prefixed(prefix, styledLines(theme.Subtle, m.Content), w)
+		body = prefixed(prefix, styledLines(theme.Subtle, m.Content))
+		if m.HugNext {
+			return body
+		}
 
 	case render.RoleTool:
 		label := m.Name
@@ -101,7 +111,7 @@ func (presenter) Message(m render.Message, prev render.Role, w int) string {
 			}
 		}
 		if m.AgentID != "" {
-			label = theme.SubAgent + " " + shortID(m.AgentID) + " · " + label
+			label = theme.SubAgent + " " + render.ShortID(m.AgentID) + " · " + label
 		}
 		var b strings.Builder
 		b.WriteString(theme.Subtle.Render(theme.Sep + " " + label))
@@ -111,25 +121,32 @@ func (presenter) Message(m render.Message, prev render.Role, w int) string {
 			b.WriteString("  " + theme.Help.Render(line))
 			b.WriteString("\n")
 		}
-		return b.String()
+		body = b.String()
 
 	case render.RoleError:
 		prefix := theme.Error.Render(theme.Cross) + " "
 		wrapped := render.Wrap(m.Content, w-lipgloss.Width(prefix))
-		return prefixed(prefix, wrapped, w)
+		body = prefixed(prefix, wrapped)
+
+	default:
+		return ""
 	}
-	return ""
+	return body + "\n"
 }
 
 // Reasoning renders the working indicator (spinner + status verb) and, when
-// present, the collapsible reasoning trace beneath it.
-func (presenter) Reasoning(r render.Reasoning, w int) string {
+// loading, the collapsible reasoning trace beneath it. Renders nothing when
+// !v.Loading.
+func (presenter) Reasoning(v render.ViewState, w int) string {
+	if !v.Loading {
+		return ""
+	}
 	var b strings.Builder
-	b.WriteString(r.Spinner + " " + theme.Reasoning.Render(r.Status))
+	b.WriteString(v.Spinner + " " + theme.Reasoning.Render(v.Status))
 	b.WriteString("\n")
-	if r.Text != "" {
+	if v.Reasoning.Text != "" {
 		b.WriteString(theme.ReasoningHeader() + "\n")
-		wrapped := render.Wrap(r.Text, w-4)
+		wrapped := render.Wrap(v.Reasoning.Text, w-4)
 		for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
 			b.WriteString("  " + theme.Reasoning.Render(line) + "\n")
 		}
@@ -137,13 +154,22 @@ func (presenter) Reasoning(r render.Reasoning, w int) string {
 	return b.String()
 }
 
+// optionStyle picks the choice-menu style for one DialogOption: the bold
+// actionable-key style when Emphasis is set, the dim hint style otherwise.
+func optionStyle(o render.DialogOption) lipgloss.Style {
+	if o.Emphasis {
+		return theme.ApproveKey
+	}
+	return theme.Help
+}
+
 // Dialog renders a modal prompt. DialogAsk arrives with its whole block
 // already composed in Title (the ask/multi-select block is domain logic that
 // stays in tui, same precedent as markdown for Message) — Dialog here just
-// places it. DialogApproval is decomposed into Rows (the argument card; a
-// single row with an empty key is the fallback unstructured-args block) and
-// Options (either the 4-line choice menu, styled per the fixed convention
-// below, or the single edit-mode hint).
+// places it. DialogApproval lays out Rows (the argument card, or — when
+// RowsUnstructured — a single wrapped prose block), Hint (the captured
+// reasoning, wrapped) and Options (the choice menu, one line per option styled
+// per its Emphasis).
 func (presenter) Dialog(d render.Dialog, w int) string {
 	switch d.Kind {
 	case render.DialogAsk:
@@ -155,11 +181,13 @@ func (presenter) Dialog(d render.Dialog, w int) string {
 		b.WriteString(gutter + theme.ApproveKey.Render(d.Title))
 		b.WriteString("\n")
 
-		if len(d.Rows) == 1 && d.Rows[0][0] == "" {
+		if d.RowsUnstructured {
 			// Fallback: unstructured args, wrapped and dimmed, no key column.
-			wrapped := render.Wrap(d.Rows[0][1], w-4)
-			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
-				b.WriteString(gutter + theme.Help.Render(line) + "\n")
+			if len(d.Rows) > 0 {
+				wrapped := render.Wrap(d.Rows[0][1], w-4)
+				for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
+					b.WriteString(gutter + theme.Help.Render(line) + "\n")
+				}
 			}
 		} else if len(d.Rows) > 0 {
 			maxKey := 0
@@ -183,19 +211,24 @@ func (presenter) Dialog(d render.Dialog, w int) string {
 		}
 
 		switch len(d.Options) {
+		case 0:
+			// Nothing to render.
 		case 1:
-			// Edit-mode hint: single line, same key styling as the choice menu.
-			b.WriteString(gutter + theme.ApproveKey.Render(d.Options[0]))
+			// Edit-mode hint: single line, no leading blank.
+			b.WriteString(gutter + optionStyle(d.Options[0]).Render(d.Options[0].Text))
 			b.WriteString("\n")
 		case 4:
-			// Choice menu: once / always / this-turn are actionable keys; the
-			// deny-edit line is a dimmer, non-key hint — matching the original
-			// hand-rolled block exactly.
+			// Classic approval menu: a blank gutter line, then the four options —
+			// matching the original hand-rolled block exactly.
 			b.WriteString(gutter + "\n")
-			b.WriteString(gutter + theme.ApproveKey.Render(d.Options[0]) + "\n")
-			b.WriteString(gutter + theme.ApproveKey.Render(d.Options[1]) + "\n")
-			b.WriteString(gutter + theme.ApproveKey.Render(d.Options[2]) + "\n")
-			b.WriteString(gutter + theme.Help.Render(d.Options[3]) + "\n")
+			for _, opt := range d.Options {
+				b.WriteString(gutter + optionStyle(opt).Render(opt.Text) + "\n")
+			}
+		default:
+			// Unexpected count: degrade visibly rather than render nothing.
+			for _, opt := range d.Options {
+				b.WriteString(gutter + theme.ApproveKey.Render(opt.Text) + "\n")
+			}
 		}
 		return b.String()
 	}
@@ -226,8 +259,9 @@ func (presenter) Header(v render.ViewState) string {
 }
 
 // Footer renders the new-output marker (when scrolled up with unread content
-// below the fold), the help/badges line, the error line, and the job footers —
-// everything that lives between the composer and the bottom of the screen.
+// below the fold), the help/badges line, the error line, and the job-status
+// footer rows — everything that lives between the composer and the bottom of
+// the screen.
 func (presenter) Footer(v render.ViewState, w int) string {
 	var b strings.Builder
 	if v.NewOutput {
@@ -246,10 +280,12 @@ func (presenter) Footer(v render.ViewState, w int) string {
 	if v.Err != "" {
 		b.WriteString("\n" + theme.Error.Render(theme.Cross+" "+v.Err))
 	}
-	for _, f := range []string{v.JobsFooter, v.ShellJobsFooter, v.LoopsFooter, v.GoalFooter} {
-		if f != "" {
-			b.WriteString("\n" + f)
+	for _, row := range v.Footers {
+		text := row.Text
+		if row.Glyph != "" {
+			text = row.Glyph + " " + text
 		}
+		b.WriteString("\n" + theme.Subtle.Render(text))
 	}
 	return b.String()
 }
