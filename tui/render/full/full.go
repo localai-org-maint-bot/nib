@@ -378,7 +378,7 @@ func (presenter) Dialog(d render.Dialog, w int) string {
 }
 
 // Header renders the brand/badge line and the rule beneath it.
-func (presenter) Header(v render.ViewState) string {
+func (p presenter) Header(v render.ViewState) string {
 	var b strings.Builder
 	left := theme.Brand.Render(v.Brand)
 	if v.AutoApprove {
@@ -394,6 +394,17 @@ func (presenter) Header(v render.ViewState) string {
 	b.WriteString(theme.Hairline(v.Width))
 	b.WriteString("\n")
 	return b.String()
+}
+
+// HeaderHeight reports how many terminal rows Header occupies above the body
+// — two today (the brand/cwd line and the hairline beneath it). Measured from
+// the real string rather than stated as a constant, so a header redesign
+// re-budgets the layout instead of silently pushing the frame past the
+// terminal's last row. See render.BlockRows for why this counts newlines
+// rather than using lipgloss.Height: Frame writes body straight onto the
+// header.
+func (p presenter) HeaderHeight(v render.ViewState) int {
+	return render.BlockRows(p.Header(v))
 }
 
 // footerRowStyle renders one FooterRow's text (glyph already prefixed), per

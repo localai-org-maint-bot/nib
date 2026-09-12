@@ -36,7 +36,18 @@ type Caps struct {
 // chrome is not a literal per-line prefix (a frame, a hanging gutter) can still
 // answer a width, and the model never has to measure chrome it did not compose.
 //
-// FooterHeight exists for the same reason in the other direction: the core
+// HeaderHeight and FooterHeight exist for the same reason in the other
+// direction: the core budgets the viewport's height by subtracting the chrome
+// that surrounds it, and neither piece is a constant. HeaderHeight was a
+// hardcoded 2 in the core's layout budget for three phases — correct only for
+// as long as both surfaces drew the same plain brand line plus hairline; a
+// bordered full-screen header would have mis-budgeted silently, exactly as the
+// composer used to before it was measured. It reports the number of rows the
+// header occupies ABOVE the body (see BlockRows): Frame concatenates body
+// straight onto header, so a header ending in "\n" occupies one row per
+// newline.
+//
+// FooterHeight is the same query at the bottom: the core
 // budgets the viewport's height by subtracting the footer, and Footer emits
 // anywhere from one row (the help line alone) to seven (new-output marker,
 // error line, four job-status rows). A fixed guess makes an over-tall frame,
@@ -98,6 +109,7 @@ type Caps struct {
 type Presenter interface {
 	Caps() Caps
 	Header(v ViewState) string
+	HeaderHeight(v ViewState) int
 	Message(m Message, prev Role, w int) string
 	ContentWidth(role Role, w int) int
 	Reasoning(v ViewState, w int) string

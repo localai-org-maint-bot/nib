@@ -766,6 +766,32 @@ func TestFooterHeightMatchesFooter(t *testing.T) {
 	}
 }
 
+// TestHeaderHeightMatchesHeader is the other half of the layout budget. The
+// core subtracts HeaderHeight from the frame to size the viewport, and
+// concatenates body straight onto the header string, so the answer must be the
+// number of rows the header leaves above the body — not lipgloss.Height, which
+// counts the empty piece after a trailing newline as a row of its own.
+//
+// The expectation is derived from the fixture rather than from Header: the
+// header is the brand/cwd line and the hairline beneath it, so two rows, and
+// the body starts on the third.
+func TestHeaderHeightMatchesHeader(t *testing.T) {
+	v := render.ViewState{Width: 60, Brand: "nib", Cwd: "~/src/project"}
+	const wantRows = 2 // brand/cwd line + hairline
+	for name, p := range presenters() {
+		if got := p.HeaderHeight(v); got != wantRows {
+			t.Errorf("%s HeaderHeight = %d, want %d (brand line + hairline)", name, got, wantRows)
+		}
+		// And the body really does start on the row after those two: the frame
+		// writes body directly onto the header with no separator.
+		out := p.Frame(v, p.Header(v), "BODY", "COMPOSER", p.Footer(v, 60), 60, 24)
+		lines := strings.Split(out, "\n")
+		if len(lines) <= wantRows || !strings.HasPrefix(lines[wantRows], "BODY") {
+			t.Errorf("%s: body does not start on row %d of the frame: %q", name, wantRows, out)
+		}
+	}
+}
+
 // TestFooterHeightGrowsWithRows pins the actual bug this answers: a fixed
 // budget of 3 was wrong because the footer is not a fixed height. A session
 // with a running sub-agent and a live loop must report more rows than a bare
@@ -855,11 +881,18 @@ func TestContentWidthMatchesRenderedPrefix(t *testing.T) {
 // closes the review finding that no Presenter method received a height and
 // no method could see body/composer/footer/chrome all at once.
 //
-// It does NOT assert an (w, h) clamp: in this task neither presenter clamps
-// to h — both still stack, exactly as they did before Frame existed, so a
-// body taller than h passes through unclamped on both surfaces. That is
-// deliberate (see full.Frame's doc comment) and asserting a clamp here would
-// pin behaviour Task 11 is the one that adds.
+// It does NOT assert an (w, h) clamp, and no later task added one: neither
+// presenter clamps to h — both stack, exactly as they did before Frame
+// existed, so a body taller than h passes through unclamped on both surfaces.
+// Fitting the frame to the terminal is the CORE's job, not a presenter's: the
+// core sizes the viewport so that header + body + dialogs + composer + footer
+// add up to h (see tui/model.go's layoutBudget and TestFrameFitsTheTerminal,
+// which measures the composed frame against the terminal on both surfaces,
+// dialogs included). A clamp here would be a second, silent answer to the same
+// question, and would hide a budget that was wrong by truncating it. The note
+// that used to sit here deferred the whole question to a task that never took
+// it up, and a ten-row approval card overflowing the alt screen by ten rows is
+// what that cost.
 func TestFrameContainsEveryPiece(t *testing.T) {
 	const w, h = 60, 40
 	v := render.ViewState{

@@ -1,14 +1,17 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/tui/render"
+	"github.com/mudler/nib/tui/render/full"
 	"github.com/mudler/nib/tui/render/inline"
 )
 
@@ -124,28 +127,54 @@ func TestViewportBudgetsAgainstFooterHeight(t *testing.T) {
 
 // TestFrameFitsTheTerminal is the property the budget exists for: whatever the
 // footer is doing, the composed frame must not be taller than the terminal.
+//
+// The presenter is part of each case, not a constant: every case here used to
+// run on frameModel()'s default inline.New(), whose Frame never places
+// v.Dialogs (the core bakes them into the viewport's scrollback instead), so a
+// pending dialog cost inline nothing and this test could not see the rows
+// full.Frame writes between body and composer. That is exactly how a
+// ten-row approval card shipped as an eight-row overflow on the default
+// surface.
 func TestFrameFitsTheTerminal(t *testing.T) {
 	cases := []struct {
-		name  string
-		setup func(m *Model)
+		name      string
+		presenter render.Presenter
+		setup     func(m *Model)
 	}{
-		{"bare", func(m *Model) {}},
-		{"one job", func(m *Model) {
+		{"bare", inline.New(), func(m *Model) {}},
+		{"one job", inline.New(), func(m *Model) {
 			m.jobs = []agentJob{{ID: "a1", Type: "explore", Status: chat.AgentStatusRunning}}
 		}},
-		{"job, error and a scrolled-up viewport", func(m *Model) {
+		{"job, error and a scrolled-up viewport", inline.New(), func(m *Model) {
 			m.jobs = []agentJob{{ID: "a1", Type: "explore", Status: chat.AgentStatusRunning}}
 			m.err = errFrameTest
 			m.viewport.SetYOffset(0)
+		}},
+		{"full surface, pending approval", full.New(), func(m *Model) {
+			m.awaitingApproval = true
+			m.pendingTool = &chat.ToolCallRequest{
+				Name:      "bash",
+				Arguments: `{"command":"ls -la"}`,
+				Reasoning: "listing the directory before editing anything in it",
+			}
+		}},
+		{"full surface, resume picker", full.New(), func(m *Model) {
+			m.awaitingResume = true
+			m.resumeList = &render.SelectList{
+				Items:      resumeItems(fakeSessions(12)),
+				MaxVisible: 8,
+			}
 		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := frameModel()
+			m.presenter = tc.presenter
 			for i := 0; i < 60; i++ {
 				m = withMessages(m, ChatMessage{Role: "user", Content: "history line"})
 			}
 			tc.setup(&m)
+			m.updateDimensions()
 			m.updateViewport()
 
 			if got := lipgloss.Height(m.View()); got > m.height {
@@ -153,6 +182,19 @@ func TestFrameFitsTheTerminal(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fakeSessions builds n stored session records for the /resume picker.
+func fakeSessions(n int) []chat.SessionRecord {
+	out := make([]chat.SessionRecord, n)
+	for i := range out {
+		out[i] = chat.SessionRecord{
+			ID:      "s" + strconv.Itoa(i),
+			Title:   "session number " + strconv.Itoa(i),
+			Updated: time.Now().Add(-time.Duration(i) * time.Hour),
+		}
+	}
+	return out
 }
 
 // TestFooterBudgetRecomputesMidTurn: a job starting is not a WindowSizeMsg, but

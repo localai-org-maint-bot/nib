@@ -81,12 +81,20 @@ type Model struct {
 	// syncLayout compares this against the current answer and re-budgets when
 	// they differ — a WindowSizeMsg is not the only thing that changes it.
 	footerBudget int
+	// chromeBudget is the total non-body height (see layoutBudget) the current
+	// viewport height was budgeted against. syncLayout re-budgets whenever the
+	// live answer differs, so an approval card or a /resume picker appearing —
+	// rows full.Frame writes between body and composer, and which nothing
+	// reserved before this — takes its rows from the viewport rather than
+	// from the top of the screen.
+	chromeBudget int
 	// footerCache memoizes the last rendered Footer string, so the two call
 	// sites that need it for the same frame — syncLayout's height budget
 	// (needed before body can be laid out) and View's own frame composition
 	// (needed after) — render it once between them instead of twice on every
 	// spinner tick. See renderFooter. It lives behind a pointer for the same
-	// reason msgViewCache does: View is a value-receiver method, but every
+	// reason the viewport's own sizes are plain fields: View is a
+	// value-receiver method, but every
 	// copy of Model shares this pointee. nil on a bare Model{} literal, which
 	// renderFooter falls back to an uncached render for.
 	footerCache *footerCache
@@ -1666,7 +1674,8 @@ func (m Model) resolveAsk(answer string) (tea.Model, tea.Cmd) {
 // error line, and four job-status rows), so it is measured against the very
 // ViewState View will render from rather than guessed.
 func (m *Model) updateDimensions() {
-	m.applyDimensions(m.footerHeight(m.viewState()))
+	vs := m.viewState()
+	m.applyDimensions(vs, m.footerHeight(vs))
 }
 
 // footerHeight asks how tall the footer is for this frame, via renderFooter
@@ -1760,21 +1769,27 @@ func (m Model) renderFooter(v render.ViewState, w int) (string, int) {
 	return rendered, height
 }
 
-// syncLayout re-budgets the viewport when the footer's height has changed
+// syncLayout re-budgets the viewport when the chrome around it has changed
 // since the last budget — a sub-agent job row appearing mid-turn, a loop
-// starting, an error line arriving. Without it the budget only ever moved on
-// a WindowSizeMsg, so a footer that grew by two rows produced a frame taller
-// than the screen: harmless spill into scrollback on the inline widget, but on
-// the alt screen bubbletea scrolls the whole composed frame and the header
-// walks off the top every time a job row appears or disappears.
+// starting, an error line arriving, an approval card or a /resume picker
+// docking above the composer on a surface that overlays dialogs. Without it
+// the budget only ever moved on a WindowSizeMsg, so chrome that grew by two
+// rows produced a frame taller than the screen: harmless spill into
+// scrollback on the inline widget, but on the alt screen bubbletea truncates
+// the composed frame from the TOP and the header walks off screen.
+//
+// It compares the whole layoutBudget, not just the footer's share: the footer
+// was the only piece that moved when this was written, and a dialog block
+// (which can be a dozen rows) moved without the budget noticing at all.
 func (m *Model) syncLayout(vs render.ViewState) {
 	// Before the first WindowSizeMsg there is no real terminal size to budget
 	// against; updateDimensions owns that first pass.
 	if m.height == 0 {
 		return
 	}
-	if fh := m.footerHeight(vs); fh != m.footerBudget {
-		m.applyDimensions(fh)
+	fh := m.footerHeight(vs)
+	if m.layoutBudget(vs, fh) != m.chromeBudget {
+		m.applyDimensions(vs, fh)
 	}
 }
 
@@ -1827,18 +1842,42 @@ func (m Model) renderComposer(w int) string {
 	return composer.String()
 }
 
-// applyDimensions sizes the components for a footer of footerHeight rows and
-// records what it budgeted for, so syncLayout can tell when that answer goes
-// stale.
-func (m *Model) applyDimensions(footerHeight int) {
-	// headerHeight is still a guess (brand/cwd line + hairline): there is no
-	// HeaderHeight query on Presenter the way there is a FooterHeight, so a
-	// future bordered full-screen header (a box rather than a plain two-row
-	// top) would mis-budget here exactly as composerHeight used to. Left
-	// hardcoded rather than guessed-and-fixed like composerHeight below,
-	// since fixing it properly needs that new Presenter method — a signature
-	// change out of this task's scope — not a local computation.
-	headerHeight := 2
+// dialogsHeight is how many rows the pending dialogs cost the frame: zero on a
+// surface that does not overlay them (inline bakes them into the viewport's
+// own scrollback, where they are body content and already inside its height),
+// and the measured height of the real rendered strings on a surface that does
+// (full.Frame writes every v.Dialogs entry between body and composer).
+//
+// This is the defect that blocked the branch: bubbles/viewport.View() pads the
+// body to exactly Height, so the arithmetic is exact — a frame of
+// header + vpHeight + dialogs + composer + footer with nothing reserved for
+// the dialogs runs over the terminal by precisely their height, and
+// bubbletea's renderer truncates the TOP. A five-option approval card is
+// 10-14 rows, so the header walked off screen on every approval on the
+// default surface.
+//
+// Measured, not guessed, for the same reason composerHeight is: an approval
+// card's height depends on its argument rows, its captured reasoning and the
+// terminal's width, and the /resume picker's on how many sessions fit its
+// window.
+func (m Model) dialogsHeight(vs render.ViewState) int {
+	if !m.presenter.Caps().OverlayDialogs {
+		return 0
+	}
+	rows := 0
+	for _, d := range vs.Dialogs {
+		rows += render.BlockRows(m.presenter.Dialog(d, m.width))
+	}
+	return rows
+}
+
+// layoutBudget is how many rows of this frame are NOT the body: the header,
+// the overlaid dialogs, the composer block and the footer. The viewport gets
+// whatever is left. syncLayout compares this against what the current sizes
+// were budgeted for, so any of the four changing mid-turn — a job row
+// appearing, an approval arriving, the `/` completion popup opening —
+// re-budgets rather than pushing the frame over the terminal's height.
+func (m Model) layoutBudget(vs render.ViewState, footerHeight int) int {
 	// The composer block between the body and the footer: a blank line after
 	// the body, the composer's own rendered height (renderComposer — usually
 	// one line, but a visible `/` completion popup or queued-message block can
@@ -1847,13 +1886,22 @@ func (m *Model) applyDimensions(footerHeight int) {
 	// call site made cheap: before it, the composer was built across four
 	// scattered call sites in View with nothing here to measure.
 	composerHeight := 2 + lipgloss.Height(m.renderComposer(m.width))
+	return m.presenter.HeaderHeight(vs) + m.dialogsHeight(vs) + composerHeight + footerHeight
+}
 
-	vpHeight := m.effectiveHeight() - headerHeight - composerHeight - footerHeight
+// applyDimensions sizes the components against the chrome vs implies for this
+// frame, with a footer of footerHeight rows, and records what it budgeted for
+// so syncLayout can tell when that answer goes stale.
+func (m *Model) applyDimensions(vs render.ViewState, footerHeight int) {
+	budget := m.layoutBudget(vs, footerHeight)
+
+	vpHeight := m.effectiveHeight() - budget
 	if vpHeight < 5 {
 		vpHeight = 5
 	}
 
 	m.footerBudget = footerHeight
+	m.chromeBudget = budget
 	m.viewport.Width = m.width
 	m.viewport.Height = vpHeight
 	m.logVP.Width = m.width
@@ -2042,13 +2090,13 @@ func (m Model) showingViewport() bool {
 //
 // Y is translated to a content-relative viewport row by subtracting the
 // chrome the Presenter's own Header renders above the body, then adding the
-// viewport's scroll offset. The chrome height is measured from
-// presenter.Header(vs) itself — the exact string View's Frame call
-// concatenates body directly onto (see full.Frame / inline.Frame: no
-// separating newline is added between them, so every "\n" Header emits is
-// one terminal row the body starts after) — rather than a hardcoded guess,
-// so a future header redesign can't silently desync the hit-test from what
-// the screen actually shows.
+// viewport's scroll offset. The chrome height comes from
+// Presenter.HeaderHeight — the same query the layout budget subtracts (see
+// layoutBudget), so the hit-test and the budget can never disagree about how
+// tall the header is. It used to count the newlines in presenter.Header(vs)
+// here while applyDimensions hardcoded 2 a few hundred lines away: two
+// measurements of one thing, and the hardcoded one was already wrong in
+// principle.
 func (m Model) reasoningBoxHit(y int) bool {
 	if m.reasoningSpanStart >= m.reasoningSpanEnd {
 		return false // nothing rendered as a box this frame
@@ -2056,7 +2104,7 @@ func (m Model) reasoningBoxHit(y int) bool {
 	if !m.showingViewport() {
 		return false // body isn't the transcript viewport this frame
 	}
-	chrome := strings.Count(m.presenter.Header(m.viewState()), "\n")
+	chrome := m.presenter.HeaderHeight(m.viewState())
 	row := y - chrome + m.viewport.YOffset
 	return row >= m.reasoningSpanStart && row < m.reasoningSpanEnd
 }
