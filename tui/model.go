@@ -781,6 +781,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionReadyMsg:
 		if msg.err != nil {
 			m.err = msg.err
+			// Every other footer-state mutator routes through updateViewport
+			// (see e.g. the responseMsg branch below) so the footer budget
+			// picks up the new error line immediately; this branch used to
+			// return early and leave it one row stale until the next
+			// unrelated re-render.
+			m.updateViewport()
 			return m, nil
 		}
 		m.session = msg.session
@@ -1946,6 +1952,17 @@ func (m *Model) updateViewport() {
 	// hazard the WindowSizeMsg handler guards against).
 	wasAtBottom := m.viewport.AtBottom() || m.forceFollow
 	m.forceFollow = false
+	// vs.NewOutput, as viewState() computed it above, read the viewport's
+	// scroll position before this pass has moved it — and before forceFollow,
+	// which the viewport hasn't been told about yet, is folded in. wasAtBottom
+	// already answers "will this pass leave the viewport at the bottom",
+	// forceFollow included; recompute NewOutput from that same answer so
+	// syncLayout budgets against the marker row Footer will actually draw for
+	// the frame this pass produces, not the one a stale pre-move read implied.
+	// Without this, a forced follow while scrolled up reserved a row for the
+	// marker that the eventual View() (built from a fresh, post-move
+	// ViewState) never draws.
+	vs.NewOutput = m.showingViewport() && !wasAtBottom
 	m.syncLayout(vs)
 
 	// Calculate available width for content (use viewport width, not terminal width)
