@@ -58,6 +58,17 @@ type Caps struct {
 // concerns: completion state, queue state, textarea state) and Frame does not
 // need to distinguish them to place them.
 //
+// header and footer are both pure functions of v (Header(v) and Footer(v,
+// w)), so v carries a second source of truth for the same two pieces —
+// this states which one wins. header MAY be discarded and re-derived from v:
+// nothing depends on measuring it before Frame runs, so a presenter that
+// draws it as part of a box border (rather than a plain top row) is free to
+// call Header(v) itself instead of placing the given string. footer MUST NOT
+// be re-derived — it is the exact string the layout budget upstream was
+// measured against (via FooterHeight, before body was ever laid out), and
+// calling Footer(v, w) again inside Frame reintroduces the double render
+// this shape exists to prevent.
+//
 // v is carried alongside the four strings (rather than Frame taking only
 // them) for what it carries that isn't captured in any one piece: v.Dialogs,
 // so a surface that owns the whole screen can place a dialog as a real

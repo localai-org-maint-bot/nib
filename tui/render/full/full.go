@@ -356,7 +356,7 @@ func (p presenter) FooterHeight(v render.ViewState, w int) int {
 // byte-for-byte the same stacked frame inline does through the new
 // composition point, so a dialog placed here has somewhere to land once Task
 // 11 gives it one worth placing.
-func (presenter) Frame(v render.ViewState, header, body, composer, footer string, w, h int) string {
+func (p presenter) Frame(v render.ViewState, header, body, composer, footer string, w, h int) string {
 	var b strings.Builder
 	b.WriteString(header)
 	b.WriteString(body)

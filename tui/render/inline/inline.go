@@ -350,7 +350,7 @@ func (p presenter) FooterHeight(v render.ViewState, w int) int {
 // footer. w and h are unused here; this surface never had a frame to budget
 // against before Task 10a, and does not gain one now — see full.Frame for the
 // surface that does.
-func (presenter) Frame(v render.ViewState, header, body, composer, footer string, w, h int) string {
+func (p presenter) Frame(v render.ViewState, header, body, composer, footer string, w, h int) string {
 	var b strings.Builder
 	b.WriteString(header)
 	b.WriteString(body)

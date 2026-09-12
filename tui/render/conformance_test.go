@@ -665,10 +665,15 @@ func TestContentWidthMatchesRenderedPrefix(t *testing.T) {
 // block a frame is made of — the header's brand/cwd, the body (the rendered
 // transcript viewport, standing in here for whatever Messages/Reasoning/
 // Dialogs produced it), the composer, and the footer's help/badges/error/job
-// rows — must survive into Frame's output on both surfaces, and the composed
-// frame must never exceed the (w, h) budget it was given. This is what closes
-// the review finding that no Presenter method received a height and no method
-// could see body/composer/footer/chrome all at once.
+// rows — must survive into Frame's output on both surfaces. This is what
+// closes the review finding that no Presenter method received a height and
+// no method could see body/composer/footer/chrome all at once.
+//
+// It does NOT assert an (w, h) clamp: in this task neither presenter clamps
+// to h — both still stack, exactly as they did before Frame existed, so a
+// body taller than h passes through unclamped on both surfaces. That is
+// deliberate (see full.Frame's doc comment) and asserting a clamp here would
+// pin behaviour Task 11 is the one that adds.
 func TestFrameContainsEveryPiece(t *testing.T) {
 	const w, h = 60, 40
 	v := render.ViewState{
@@ -696,9 +701,6 @@ func TestFrameContainsEveryPiece(t *testing.T) {
 
 			if !strings.Contains(out, composer) {
 				t.Errorf("%s Frame dropped the composer entirely: %q", name, out)
-			}
-			if got := lipgloss.Height(out); got > h {
-				t.Errorf("%s Frame is %d rows tall, budget was %d", name, got, h)
 			}
 		})
 	}

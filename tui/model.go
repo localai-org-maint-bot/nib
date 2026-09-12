@@ -1495,16 +1495,17 @@ func (m *Model) updateDimensions() {
 // so this and the frame's eventual Footer text (rendered later, in View) come
 // from the same cached render rather than each paying for their own.
 func (m Model) footerHeight(vs render.ViewState) int {
-	return lipgloss.Height(m.renderFooter(vs, m.width))
+	_, h := m.renderFooter(vs, m.width)
+	return h
 }
 
 // footerCache is renderFooter's memo: the fields Footer actually reads from a
-// ViewState (see render.Presenter.Footer), plus the width, and the string
-// that produced. A ViewState carries plenty Footer never looks at —
-// Messages, Reasoning, Dialogs — so keying on those exact fields means an
-// unrelated change (a streamed token, a reasoning trace update) leaves the
-// cache valid, while anything that would actually change Footer's output
-// invalidates it correctly. Footers is flattened to a string because
+// ViewState (see render.Presenter.Footer), plus the width, and the rendered
+// string and height that produced. A ViewState carries plenty Footer never
+// looks at — Messages, Reasoning, Dialogs — so keying on those exact fields
+// means an unrelated change (a streamed token, a reasoning trace update)
+// leaves the cache valid, while anything that would actually change Footer's
+// output invalidates it correctly. Footers is flattened to a string because
 // []render.FooterRow isn't comparable with ==; FooterRow's own fields are all
 // plain strings/ints, so joining them with NUL separators can't collide two
 // distinct row lists onto the same key.
@@ -1515,6 +1516,7 @@ type footerCache struct {
 	newOutput         bool
 	footers           string
 	rendered          string
+	height            int
 }
 
 // footerCacheKey builds the comparable snapshot of v's Footer-relevant
@@ -1534,21 +1536,31 @@ func footerCacheKey(v render.ViewState, w int) footerCache {
 	}
 }
 
-// renderFooter returns Presenter.Footer(v, w), reusing the model's cached
-// string when v's footer-relevant fields and w exactly match what produced
-// it. Footer is a pure function of exactly those fields, so a key match
-// proves the cached string is still exactly what a fresh call would return.
-// Without this, syncLayout's height budget (which must run before body can
-// be laid out, since the viewport's height depends on it) and View's own
-// frame composition (which needs the footer's actual text) each rendered
-// Footer themselves — twice per frame, on every spinner tick while loading
-// (~80ms) — this is Task 10a's third carried defect.
+// renderFooter returns Presenter.Footer(v, w) and Presenter.FooterHeight(v,
+// w), reusing the model's cached pair when v's footer-relevant fields and w
+// exactly match what produced it. Both are pure functions of exactly those
+// fields, so a key match proves the cached pair is still exactly what a
+// fresh call of each would return. Without this, syncLayout's height budget
+// (which must run before body can be laid out, since the viewport's height
+// depends on it) and View's own frame composition (which needs the footer's
+// actual text) each rendered Footer themselves — twice per frame, on every
+// spinner tick while loading (~80ms) — this is Task 10a's third carried
+// defect.
+//
+// The height still goes through Presenter.FooterHeight rather than
+// lipgloss.Height(rendered): the model asks the presenter, the same rule
+// ContentWidth documents, rather than measuring chrome it did not compose.
+// That does mean a genuine cache MISS (footer content actually changed —
+// a job row appearing, an error arriving) renders Footer twice, once
+// directly and once inside FooterHeight; a HIT — the common case, since most
+// re-renders (spinner ticks, streamed tokens) don't touch Footer's inputs —
+// renders it zero times, reusing both cached values.
 //
 // footerCache lives behind a pointer (see the Model field comment), so this
 // value-receiver method can still update it in place; on a bare Model{}
 // literal (footerCache nil, as in tests that skip newTestModel) it falls back
 // to an uncached render, matching msgViewCache's nil-safety precedent.
-func (m Model) renderFooter(v render.ViewState, w int) string {
+func (m Model) renderFooter(v render.ViewState, w int) (string, int) {
 	key := footerCacheKey(v, w)
 	if m.footerCache != nil && m.footerCache.valid &&
 		key.width == m.footerCache.width &&
@@ -1557,15 +1569,17 @@ func (m Model) renderFooter(v render.ViewState, w int) string {
 		key.err == m.footerCache.err &&
 		key.newOutput == m.footerCache.newOutput &&
 		key.footers == m.footerCache.footers {
-		return m.footerCache.rendered
+		return m.footerCache.rendered, m.footerCache.height
 	}
 	rendered := m.presenter.Footer(v, w)
+	height := m.presenter.FooterHeight(v, w)
 	if m.footerCache != nil {
 		key.rendered = rendered
+		key.height = height
 		key.valid = true
 		*m.footerCache = key
 	}
-	return rendered
+	return rendered, height
 }
 
 // syncLayout re-budgets the viewport when the footer's height has changed
@@ -1586,22 +1600,29 @@ func (m *Model) syncLayout(vs render.ViewState) {
 	}
 }
 
+// effectiveHeight is m.height clamped to maxHeight (0 = no limit) — the
+// actual number of rows the frame is budgeted against. applyDimensions uses
+// it to size the viewport; View passes the same value to Presenter.Frame as
+// its height budget, so a presenter that centres an overlay against h (Task
+// 11) sizes against the terminal rows this session actually uses, not the
+// raw (possibly larger) terminal height a maxHeight flag deliberately caps.
+func (m Model) effectiveHeight() int {
+	if m.maxHeight > 0 && m.height > m.maxHeight {
+		return m.maxHeight
+	}
+	return m.height
+}
+
 // applyDimensions sizes the components for a footer of footerHeight rows and
 // records what it budgeted for, so syncLayout can tell when that answer goes
 // stale.
 func (m *Model) applyDimensions(footerHeight int) {
-	// Constrain height to maxHeight if set
-	effectiveHeight := m.height
-	if m.maxHeight > 0 && effectiveHeight > m.maxHeight {
-		effectiveHeight = m.maxHeight
-	}
-
 	headerHeight := 2 // brand/cwd line + hairline
 	// The composer block between the body and the footer: the blank line after
 	// the body, the single-line input, and the blank line before the footer.
 	composerHeight := 3
 
-	vpHeight := effectiveHeight - headerHeight - composerHeight - footerHeight
+	vpHeight := m.effectiveHeight() - headerHeight - composerHeight - footerHeight
 	if vpHeight < 5 {
 		vpHeight = 5
 	}
@@ -2139,13 +2160,13 @@ func (m Model) View() string {
 	// the viewport's height against. renderFooter reuses syncLayout's render
 	// of this same vs when nothing footer-relevant changed since, rather than
 	// paying for a second Footer call every frame.
-	footer := m.renderFooter(vs, m.width)
+	footer, _ := m.renderFooter(vs, m.width)
 
 	// Frame is the whole-screen composition point: it places header, body,
 	// composer and footer relative to one another. Inline (and full, for now)
 	// simply stack them in this same order; a surface that owns the whole
 	// screen can do more once there's a dialog worth overlaying (Task 11).
-	return presenter.Frame(vs, header, body, composer.String(), footer, m.width, m.height)
+	return presenter.Frame(vs, header, body, composer.String(), footer, m.width, m.effectiveHeight())
 }
 
 // helpLine returns the context-appropriate help string.
