@@ -80,7 +80,7 @@ func (m *Model) dispatchLoop(payload string) tea.Cmd {
 	switch {
 	case live && m.parked:
 		if m.session.Inject(text) {
-			m.messages = append(m.messages, ChatMessage{Role: "user", Content: payload})
+			m.appendMessage(ChatMessage{Role: "user", Content: payload})
 			m.parked = false
 			m.loading = true
 			m.interruptArmed = false
@@ -94,7 +94,7 @@ func (m *Model) dispatchLoop(payload string) tea.Cmd {
 		m.updateViewport()
 		return nil
 	case m.sessionReady && m.session != nil && !m.awaitingApproval && !m.awaitingAsk:
-		m.messages = append(m.messages, ChatMessage{Role: "user", Content: payload})
+		m.appendMessage(ChatMessage{Role: "user", Content: payload})
 		m.loading = true
 		m.interruptArmed = false
 		m.status = "Thinking…"
@@ -110,7 +110,7 @@ func (m *Model) startLoop(a slash.Action) tea.Cmd {
 	// Validate the payload up front so a bad command fails loudly, not silently.
 	pa := slash.Resolve(a.Payload, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
 	if pa.Kind == slash.KindError {
-		m.messages = append(m.messages, ChatMessage{Role: "error", Content: "loop payload: " + pa.Err})
+		m.appendMessage(ChatMessage{Role: "error", Content: "loop payload: " + pa.Err})
 		m.updateViewport()
 		return nil
 	}
@@ -122,7 +122,7 @@ func (m *Model) startLoop(a slash.Action) tea.Cmd {
 	if a.Interval == 0 {
 		// Self-paced: run once + inject the convention; the model re-arms.
 		m.selfPaced++
-		m.messages = append(m.messages, ChatMessage{Role: "user", Content: a.Payload})
+		m.appendMessage(ChatMessage{Role: "user", Content: a.Payload})
 		m.loading = true
 		m.interruptArmed = false
 		m.status = "Thinking…"
@@ -134,12 +134,12 @@ func (m *Model) startLoop(a slash.Action) tea.Cmd {
 	expr := durationToCron(a.Interval)
 	j, err := m.loops.Add(expr, a.Payload, true, false)
 	if err != nil {
-		m.messages = append(m.messages, ChatMessage{Role: "error", Content: "loop: " + err.Error()})
+		m.appendMessage(ChatMessage{Role: "error", Content: "loop: " + err.Error()})
 		m.updateViewport()
 		return nil
 	}
-	m.messages = append(m.messages, ChatMessage{Role: "agent", Content: fmt.Sprintf("Looping %q %s (%s). Stop with /loop stop %s.", a.Payload, a.Interval, j.ID, j.ID)})
-	m.messages = append(m.messages, ChatMessage{Role: "user", Content: a.Payload})
+	m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf("Looping %q %s (%s). Stop with /loop stop %s.", a.Payload, a.Interval, j.ID, j.ID)})
+	m.appendMessage(ChatMessage{Role: "user", Content: a.Payload})
 	m.loading = true
 	m.interruptArmed = false
 	m.status = "Thinking…"

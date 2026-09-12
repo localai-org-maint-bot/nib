@@ -38,6 +38,17 @@ type ChatMessage struct {
 	AgentID   string // issuing sub-agent, for Role == "tool" (empty = root agent)
 }
 
+// appendMessage appends one or more entries to the transcript and bumps
+// msgRev. This is the single choke-point every mutation of m.messages in this
+// package must go through — never assign to m.messages directly — so
+// msgViewCache's invalidation key (see messageProjCache) stays correct no
+// matter how a future change mutates the transcript, rather than relying on
+// every call site happening to be an append.
+func (m *Model) appendMessage(msgs ...ChatMessage) {
+	m.messages = append(m.messages, msgs...)
+	m.msgRev++
+}
+
 // Model represents the TUI state
 type Model struct {
 	// UI components
@@ -55,6 +66,15 @@ type Model struct {
 	// re-copy the whole transcript when it hasn't changed. See
 	// messageProjCache / projectedMessages. nil on a bare Model{} literal.
 	msgViewCache *messageProjCache
+	// msgRev counts mutations of messages. Bumped only by appendMessage, the
+	// single choke-point every append call site in this package goes through
+	// (never assign to messages directly) — see appendMessage's doc comment.
+	// projectedMessages keys its cache on this, not len(messages): a length
+	// key is correct only as long as every mutation happens to be an append,
+	// a property nothing enforces once someone edits a message's Content in
+	// place (a streaming reply rewriting the last message, say) or adds a
+	// width-dependent step to the projection.
+	msgRev int
 
 	// Chat state
 	messages     []ChatMessage
@@ -685,7 +705,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Check if we're answering an ask_user question
 			if m.awaitingAsk && m.pendingAsk != nil {
 				answer := parseAskAnswer(m.textarea.Value(), *m.pendingAsk)
-				m.messages = append(m.messages, ChatMessage{Role: "user", Content: answer})
+				m.appendMessage(ChatMessage{Role: "user", Content: answer})
 				m.textarea.Reset()
 				m.awaitingAsk = false
 				m.pendingAsk = nil
@@ -751,7 +771,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessionReady = true
 		// Reload durable cron loops persisted from a previous session.
 		if n, err := m.loops.Load(m.loopsPath); err == nil && n > 0 {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: fmt.Sprintf("Reloaded %d durable loop(s).", n)})
+			m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf("Reloaded %d durable loop(s).", n)})
 		}
 		// Start listening for callbacks
 		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenPark(), m.listenCompact(), m.listenPrune())
@@ -766,7 +786,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Surface any attachments that couldn't be sent (blocked by model caps
 		// or resolution), mirroring the CLI's per-file error lines.
 		for _, b := range msg.blocked {
-			m.messages = append(m.messages, ChatMessage{Role: "error", Content: filepath.Base(b.Path) + " — " + b.Reason})
+			m.appendMessage(ChatMessage{Role: "error", Content: filepath.Base(b.Path) + " — " + b.Reason})
 		}
 		// Clear staged attachments only on a successful send (retain on error),
 		// matching the CLI REPL.
@@ -775,15 +795,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			if errors.Is(msg.err, context.Canceled) {
-				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "interrupted."})
+				m.appendMessage(ChatMessage{Role: "agent", Content: "interrupted."})
 			} else {
 				m.err = msg.err
-				m.messages = append(m.messages, ChatMessage{Role: "error", Content: msg.err.Error()})
+				m.appendMessage(ChatMessage{Role: "error", Content: msg.err.Error()})
 			}
 		} else if content := strings.TrimSpace(msg.content); content != "" && content != m.lastParkedReply {
 			// Skip the final reply when it duplicates the text already surfaced at
 			// the park gate (a run that parked and returned with the same answer).
-			m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: msg.content})
+			m.appendMessage(ChatMessage{Role: "assistant", Content: msg.content})
 		}
 		m.lastParkedReply = ""
 		if m.session != nil {
@@ -813,7 +833,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// chatting — their input injects into this same run.
 			reply := strings.TrimSpace(msg.reply)
 			if reply != "" && reply != m.lastParkedReply {
-				m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: reply})
+				m.appendMessage(ChatMessage{Role: "assistant", Content: reply})
 				m.lastParkedReply = reply
 			}
 			m.parked = true
@@ -858,11 +878,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.status = ""
 		if msg.err != nil {
-			m.messages = append(m.messages, ChatMessage{Role: "error", Content: "compaction failed: " + msg.err.Error()})
+			m.appendMessage(ChatMessage{Role: "error", Content: "compaction failed: " + msg.err.Error()})
 		} else if msg.before == msg.after {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "Nothing to compact yet."})
+			m.appendMessage(ChatMessage{Role: "agent", Content: "Nothing to compact yet."})
 		} else {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: compactNotice(msg.before, msg.after)})
+			m.appendMessage(ChatMessage{Role: "agent", Content: compactNotice(msg.before, msg.after)})
 			m.contextTokens = msg.after
 			// The context shrank; the spend did not. Re-read the session's own
 			// counter rather than deriving anything from msg.
@@ -879,7 +899,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case compactNoticeMsg:
-		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: compactNotice(msg[0], msg[1])})
+		m.appendMessage(ChatMessage{Role: "agent", Content: compactNotice(msg[0], msg[1])})
 		m.contextTokens = msg[1]
 		// Auto-compaction only shrinks the context: the summarising call itself
 		// costs tokens, so take the session's total rather than msg's numbers.
@@ -890,7 +910,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.listenCompact()
 
 	case pruneNoticeMsg:
-		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: prunedNotice(msg[0], msg[1])})
+		m.appendMessage(ChatMessage{Role: "agent", Content: prunedNotice(msg[0], msg[1])})
 		m.updateViewport()
 		return m, m.listenPrune()
 
@@ -957,14 +977,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			text = prompt // fall back to the raw text for non-send payloads
 		}
 		if m.session != nil && m.parked && m.session.Inject(text) {
-			m.messages = append(m.messages, ChatMessage{Role: "user", Content: prompt})
+			m.appendMessage(ChatMessage{Role: "user", Content: prompt})
 			m.parked = false
 			m.loading = true
 			m.interruptArmed = false
 			m.status = "Thinking…"
 			m.updateViewport()
 		} else if m.sessionReady && m.session != nil && !m.loading && !m.awaitingApproval && !m.awaitingAsk {
-			m.messages = append(m.messages, ChatMessage{Role: "user", Content: prompt})
+			m.appendMessage(ChatMessage{Role: "user", Content: prompt})
 			m.loading = true
 			m.interruptArmed = false
 			m.status = "Thinking…"
@@ -1015,14 +1035,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// final result, also surface it inline as one labeled block. Per-tool
 		// activity stays in the Ctrl+O log viewer.
 		if line := agentTranscriptLine(ev); line != "" {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", AgentID: ev.ID, Content: line})
+			m.appendMessage(ChatMessage{Role: "agent", AgentID: ev.ID, Content: line})
 		}
 		if ev.Status == chat.AgentStatusCompleted && strings.TrimSpace(ev.Result) != "" {
 			typ := ev.Type
 			if typ == "" {
 				typ = "agent"
 			}
-			m.messages = append(m.messages, ChatMessage{
+			m.appendMessage(ChatMessage{
 				Role:    "agent_result",
 				Name:    typ,
 				AgentID: ev.ID,
@@ -1041,7 +1061,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if res.AgentID == "" {
 			// Root agent: stream the result inline with its (previewed) body.
 			if preview := chat.PreviewResult(res.Result, toolResultPreviewLines); preview != "" {
-				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Arguments: res.Arguments, Content: preview})
+				m.appendMessage(ChatMessage{Role: "tool", Name: res.Name, Arguments: res.Arguments, Content: preview})
 				m.updateViewport()
 			}
 		} else {
@@ -1054,7 +1074,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if label == "" {
 				label = res.Name
 			}
-			m.messages = append(m.messages, ChatMessage{Role: "agent_tool", Name: res.Name, Arguments: res.Arguments, AgentID: res.AgentID, Content: label})
+			m.appendMessage(ChatMessage{Role: "agent_tool", Name: res.Name, Arguments: res.Arguments, AgentID: res.AgentID, Content: label})
 			m.updateViewport()
 			if m.showLogs && m.logOpenID != "" {
 				m.syncLogViewport()
@@ -1112,7 +1132,7 @@ func fencedListing(listing string) string {
 // skill load or a resolve error). Shared by the Enter handler and the queue
 // flush so typed-while-idle and queued-while-busy input behave identically.
 func (m *Model) dispatchInput(input string) tea.Cmd {
-	m.messages = append(m.messages, ChatMessage{Role: "user", Content: input})
+	m.appendMessage(ChatMessage{Role: "user", Content: input})
 	return m.dispatchResolved(input)
 }
 
@@ -1123,14 +1143,14 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 	action := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
 	switch action.Kind {
 	case slash.KindError:
-		m.messages = append(m.messages, ChatMessage{Role: "error", Content: action.Err})
+		m.appendMessage(ChatMessage{Role: "error", Content: action.Err})
 		return nil
 	case slash.KindLoadSkill:
 		notice, err := m.session.LoadSkill(action.Skill)
 		if err != nil {
-			m.messages = append(m.messages, ChatMessage{Role: "error", Content: err.Error()})
+			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
 		} else {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: notice})
+			m.appendMessage(ChatMessage{Role: "agent", Content: notice})
 		}
 		return nil
 	case slash.KindCompact:
@@ -1145,10 +1165,10 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		defer cancel()
 		models, err := m.session.ListModels(lookupCtx)
 		if err != nil {
-			m.messages = append(m.messages, ChatMessage{Role: "error", Content: err.Error()})
+			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
 		} else {
 			listing := fencedListing(chat.FormatModelList(models, m.session.Model()))
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: listing})
+			m.appendMessage(ChatMessage{Role: "agent", Content: listing})
 		}
 		return nil
 	case slash.KindModelSet:
@@ -1161,40 +1181,40 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 			// through render.Wrap, which re-flows on word boundaries, drops the
 			// leading indent and clips a long model ID, so at a narrow width
 			// the marker column stops meaning anything.
-			m.messages = append(m.messages,
+			m.appendMessage(
 				ChatMessage{Role: "error", Content: unserved.Headline()},
 				ChatMessage{Role: "agent", Content: fencedListing(unserved.Listing())})
 		case err != nil:
-			m.messages = append(m.messages, ChatMessage{Role: "error", Content: err.Error()})
+			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
 		default:
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: notice})
+			m.appendMessage(ChatMessage{Role: "agent", Content: notice})
 		}
 		return nil
 	case slash.KindLoopStart:
 		return m.startLoop(action)
 	case slash.KindLoopStop:
-		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: m.stopLoop(action.LoopID)})
+		m.appendMessage(ChatMessage{Role: "agent", Content: m.stopLoop(action.LoopID)})
 		return nil
 	case slash.KindLoopList:
-		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: m.listLoops()})
+		m.appendMessage(ChatMessage{Role: "agent", Content: m.listLoops()})
 		return nil
 	case slash.KindGoalSet:
 		m.session.SetGoal(action.Text)
-		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: theme.Goal + " Goal set: " + action.Text + "\nI'll pursue it on your next message, re-checking until it's met. Press Ctrl+C or /goal clear to stop."})
+		m.appendMessage(ChatMessage{Role: "agent", Content: theme.Goal + " Goal set: " + action.Text + "\nI'll pursue it on your next message, re-checking until it's met. Press Ctrl+C or /goal clear to stop."})
 		return nil
 	case slash.KindGoalShow:
 		if g := m.session.Goal(); g != "" {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: theme.Goal + " Current goal: " + g})
+			m.appendMessage(ChatMessage{Role: "agent", Content: theme.Goal + " Current goal: " + g})
 		} else {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "No goal set. Use /goal <text> to set one."})
+			m.appendMessage(ChatMessage{Role: "agent", Content: "No goal set. Use /goal <text> to set one."})
 		}
 		return nil
 	case slash.KindGoalClear:
 		if m.session.Goal() != "" {
 			m.session.ClearGoal()
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "Goal cleared."})
+			m.appendMessage(ChatMessage{Role: "agent", Content: "Goal cleared."})
 		} else {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "No goal to clear."})
+			m.appendMessage(ChatMessage{Role: "agent", Content: "No goal to clear."})
 		}
 		return nil
 	case slash.KindAttach:
@@ -1205,10 +1225,10 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 			if action.Transcribe {
 				mode = "transcribe"
 			}
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "attached: " + filepath.Base(action.AttachPath) + " (" + mode + ") — sends with your next message"})
+			m.appendMessage(ChatMessage{Role: "agent", Content: "attached: " + filepath.Base(action.AttachPath) + " (" + mode + ") — sends with your next message"})
 		case slash.AttachList:
 			if len(m.pending) == 0 {
-				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "nothing staged"})
+				m.appendMessage(ChatMessage{Role: "agent", Content: "nothing staged"})
 			} else {
 				var b strings.Builder
 				for i, s := range m.pending {
@@ -1217,12 +1237,12 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 					}
 					b.WriteString(filepath.Base(s.Path))
 				}
-				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: b.String()})
+				m.appendMessage(ChatMessage{Role: "agent", Content: b.String()})
 			}
 		case slash.AttachClear:
 			n := len(m.pending)
 			m.pending = nil
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: fmt.Sprintf("cleared %d staged attachment(s)", n)})
+			m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf("cleared %d staged attachment(s)", n)})
 		}
 		return nil
 	default: // slash.KindSend
@@ -1648,7 +1668,7 @@ func (m Model) currentDialogs() []render.Dialog {
 // needing a pointer-receiver Model. nil on a bare Model{} literal, as many
 // tests construct — projectedMessages falls back to an uncached build then.
 type messageProjCache struct {
-	len  int
+	rev  int
 	msgs []render.Message
 }
 
@@ -1657,12 +1677,25 @@ type messageProjCache struct {
 // this package's own rendering path reads it; updateViewport drives its loop
 // from m.messages directly. Without caching this re-copied and re-mapped the
 // whole transcript on every View() call, which happens on every spinner tick
-// (~10Hz) whether or not the transcript changed since the last frame. Since
-// every mutation of m.messages in this codebase is an append (verified: no
-// call site replaces or edits it in place), the transcript length is a
-// correct invalidation key.
+// (~10Hz) whether or not the transcript changed since the last frame.
+//
+// The cache is keyed on m.msgRev, not len(m.messages): a length key is only
+// correct as long as every mutation happens to be an append, which nothing
+// enforces (an in-place edit of an existing message's Content — a streaming
+// reply rewriting the last message, say — would leave the length unchanged
+// and silently serve stale output). msgRev is bumped only by appendMessage,
+// the single choke-point every append in this package goes through, so the
+// invariant is structural rather than a comment claiming a property of every
+// call site. If this projection ever grows a width-dependent step (glamour,
+// wrapping), contentWidth must join the cache key alongside msgRev.
+//
+// The returned slice may alias the cache's backing array directly (a cache
+// hit is not copied) rather than paying a defensive copy on every frame —
+// safe today only because nothing reads ViewState.Messages yet (see
+// viewState); the moment a consumer holds onto or mutates it, this must
+// switch to returning a copy.
 func (m Model) projectedMessages() []render.Message {
-	if m.msgViewCache != nil && m.msgViewCache.len == len(m.messages) {
+	if m.msgViewCache != nil && m.msgViewCache.rev == m.msgRev {
 		return m.msgViewCache.msgs
 	}
 	out := make([]render.Message, 0, len(m.messages))
@@ -1676,7 +1709,7 @@ func (m Model) projectedMessages() []render.Message {
 		})
 	}
 	if m.msgViewCache != nil {
-		m.msgViewCache.len = len(m.messages)
+		m.msgViewCache.rev = m.msgRev
 		m.msgViewCache.msgs = out
 	}
 	return out

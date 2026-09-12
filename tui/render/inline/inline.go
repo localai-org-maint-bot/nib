@@ -263,8 +263,9 @@ func (presenter) Header(v render.ViewState) string {
 // its Kind. FooterJobs/FooterShell reproduce the original theme.Meta +
 // width-fill treatment (Width doesn't just pad — lipgloss wraps content
 // exceeding w, so a narrow terminal hard-wraps instead of spilling, exactly
-// as before); FooterLoops/FooterGoal reproduce the original theme.Subtle,
-// unfilled.
+// as before); everything else — FooterLoops/FooterGoal, and the zero-value
+// FooterKindUnset (a forgotten Kind on some future fifth row) — gets the
+// plain default: theme.Subtle, unfilled.
 func footerRowStyle(kind render.FooterRowKind, text string, w int) string {
 	switch kind {
 	case render.FooterJobs, render.FooterShell:

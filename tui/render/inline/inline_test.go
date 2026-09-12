@@ -54,3 +54,76 @@ func TestCapsAreInlineWidgetCaps(t *testing.T) {
 		t.Error("the inline widget does not enable mouse reporting")
 	}
 }
+
+// TestFooterRowsStyledByKind pins the styling this task's review caught
+// regressing once: FooterJobs/FooterShell must render with theme.Meta and
+// lipgloss's Width fill (which pads short lines AND wraps ones exceeding the
+// given width — not just padding), while FooterLoops/FooterGoal (and the
+// zero-value FooterKindUnset) render with theme.Subtle, unfilled. Asserted
+// against the real styles' own output, not by reflecting on style objects.
+func TestFooterRowsStyledByKind(t *testing.T) {
+	p := New()
+	const width = 20
+
+	footer := func(kind render.FooterRowKind, text string) string {
+		out := p.Footer(render.ViewState{
+			Footers: []render.FooterRow{{Text: text, Kind: kind}},
+		}, width)
+		// Footer always leads with the help line (empty here) then "\n" before
+		// the row; strip that to isolate the row's own rendering.
+		return strings.TrimPrefix(out, "\n")
+	}
+
+	t.Run("jobs gets Meta+Width", func(t *testing.T) {
+		text := "jobs: 1 running"
+		want := theme.Meta.Width(width).Render(text)
+		if got := footer(render.FooterJobs, text); got != want {
+			t.Errorf("FooterJobs row = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("shell gets Meta+Width", func(t *testing.T) {
+		text := "shell: 1 running"
+		want := theme.Meta.Width(width).Render(text)
+		if got := footer(render.FooterShell, text); got != want {
+			t.Errorf("FooterShell row = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("loops gets Subtle, unfilled", func(t *testing.T) {
+		text := "1 loop(s): x"
+		want := theme.Subtle.Render(text)
+		if got := footer(render.FooterLoops, text); got != want {
+			t.Errorf("FooterLoops row = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("goal gets Subtle, unfilled", func(t *testing.T) {
+		text := "goal: ship it"
+		want := theme.Subtle.Render(text)
+		if got := footer(render.FooterGoal, text); got != want {
+			t.Errorf("FooterGoal row = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("unset Kind falls back to the plain default, not Jobs styling", func(t *testing.T) {
+		text := "some future row"
+		want := theme.Subtle.Render(text)
+		if got := footer(render.FooterKindUnset, text); got != want {
+			t.Errorf("FooterKindUnset row = %q, want %q (the Subtle default, not Meta+Width)", got, want)
+		}
+	})
+
+	t.Run("Width wraps an over-long jobs row instead of spilling", func(t *testing.T) {
+		long := strings.Repeat("x", width*3)
+		want := theme.Meta.Width(width).Render(long)
+		got := footer(render.FooterJobs, long)
+		if got != want {
+			t.Fatalf("over-long FooterJobs row = %q, want %q", got, want)
+		}
+		lines := strings.Split(got, "\n")
+		if len(lines) < 2 {
+			t.Fatalf("expected the over-long row to wrap onto multiple lines, got %d: %q", len(lines), got)
+		}
+	})
+}

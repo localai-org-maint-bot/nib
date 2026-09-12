@@ -104,10 +104,16 @@ type Dialog struct {
 // original hand-rolled footer gave jobs/shell one treatment and loops/goal
 // another), so this is domain data the tui-side builders supply — not
 // something a Presenter can infer from Glyph/Text alone.
+//
+// FooterKindUnset is deliberately the zero value: a FooterRow built without
+// setting Kind (a forgotten case in a future fifth row) must degrade to a
+// Presenter's plain default styling, not silently adopt FooterJobs's
+// treatment just because it happens to be int 0.
 type FooterRowKind int
 
 const (
-	FooterJobs FooterRowKind = iota
+	FooterKindUnset FooterRowKind = iota
+	FooterJobs
 	FooterShell
 	FooterLoops
 	FooterGoal
