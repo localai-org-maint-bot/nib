@@ -1,6 +1,10 @@
 package theme
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // isASCII reports whether every rune in s is in the 7-bit ASCII range — i.e.
 // the glyph is guaranteed to render on a fixed bitmap VT-console font.
@@ -56,7 +60,7 @@ func TestApplyGlyphProfile(t *testing.T) {
 	t.Cleanup(applyGlyphProfile)
 
 	swappable := func() []string {
-		return []string{PromptGlyph, ApprovalGutter, SubAgent, Arrow, Loop, ShellJob, ScrollKeys, ReasoningGlyph, NewOutputGlyph}
+		return []string{PromptGlyph, ApprovalGutter, SubAgent, Arrow, Loop, ShellJob, ScrollKeys, ReasoningGlyph, NewOutputGlyph, HairlineGlyph}
 	}
 
 	t.Setenv("NIB_ASCII", "1")
@@ -77,5 +81,29 @@ func TestApplyGlyphProfile(t *testing.T) {
 	}
 	if !anyNonASCII {
 		t.Fatal("full profile should restore non-ASCII typographic glyphs")
+	}
+}
+
+// TestHairlineRespectsGlyphProfile pins the rule that moved out of the
+// presenters: the hairline is one repeated glyph, and it swaps to ASCII on a
+// restricted terminal like every other non-Latin-1 mark.
+func TestHairlineRespectsGlyphProfile(t *testing.T) {
+	t.Cleanup(applyGlyphProfile)
+
+	t.Setenv("NIB_ASCII", "1")
+	applyGlyphProfile()
+	got := Hairline(5)
+	if !isASCII(got) {
+		t.Errorf("Hairline(5) = %q, want ASCII on a restricted terminal", got)
+	}
+
+	t.Setenv("NIB_ASCII", "0")
+	applyGlyphProfile()
+	if got := lipgloss.Width(Hairline(7)); got != 7 {
+		t.Errorf("Hairline(7) width = %d, want 7", got)
+	}
+	// A degenerate width must still produce a rule, never the empty string.
+	if got := lipgloss.Width(Hairline(0)); got != 1 {
+		t.Errorf("Hairline(0) width = %d, want 1", got)
 	}
 }

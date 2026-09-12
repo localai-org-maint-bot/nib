@@ -8,6 +8,7 @@ package theme
 
 import (
 	"os"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -38,6 +39,7 @@ var (
 	ScrollKeys     = "↑↓" // up/down navigation hint
 	ReasoningGlyph = "✻"  // marks a block of model thinking/reasoning
 	NewOutputGlyph = "↓"  // footer marker: new content arrived while scrolled up
+	HairlineGlyph  = "─"  // the one-cell rule repeated under the header
 )
 
 // spinnerFrames animates the working indicator. Braille cells read as a smooth
@@ -77,8 +79,8 @@ func init() { applyGlyphProfile() }
 // On restricted terminals the non-Latin-1 marks become ASCII stand-ins so they
 // never paint as blank cells; otherwise the full typographic set is used. It
 // sets both branches explicitly so it is idempotent and reversible (tests flip
-// the env and call it again). Latin-1 marks (Sep ·, Cross ×) and box-drawing
-// (─, used inline for rules) render on the VT console font and are left as-is.
+// the env and call it again). Latin-1 marks (Sep ·, Cross ×) render on the VT
+// console font and are left as-is.
 func applyGlyphProfile() {
 	if RestrictedGlyphs() {
 		PromptGlyph, ApprovalGutter, SubAgent = ">", "|", ">"
@@ -87,6 +89,7 @@ func applyGlyphProfile() {
 		Goal = "*"
 		ReasoningGlyph = "*"
 		NewOutputGlyph = "v"
+		HairlineGlyph = "-"
 		return
 	}
 	PromptGlyph, ApprovalGutter, SubAgent = "›", "▏", "↳"
@@ -95,6 +98,7 @@ func applyGlyphProfile() {
 	Goal = "◎"
 	ReasoningGlyph = "✻"
 	NewOutputGlyph = "↓"
+	HairlineGlyph = "─"
 }
 
 // Styles. Bold is reserved for the brand mark and the active approval keys.
@@ -126,6 +130,19 @@ var (
 // The body beneath is rendered with the Reasoning style by the caller.
 func ReasoningHeader() string {
 	return Gutter.Render(ReasoningGlyph) + " " + Help.Render("reasoning")
+}
+
+// Hairline renders the dim horizontal rule that closes the header: the
+// swappable HairlineGlyph (─ / - in restricted mode) repeated to width, in the
+// Rule style. It lives here rather than in a presenter because both surfaces
+// draw the same rule, and repeating the rune inline in each of them put a
+// non-Latin-1 glyph outside RestrictedGlyphs()'s reach. A width below 1 still
+// yields one cell, so the rule never renders as the empty string.
+func Hairline(width int) string {
+	if width < 1 {
+		width = 1
+	}
+	return Rule.Render(strings.Repeat(HairlineGlyph, width))
 }
 
 // NewOutputMarker renders the dim footer marker shown when the user is
