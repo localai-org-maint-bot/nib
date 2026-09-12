@@ -86,7 +86,7 @@ const (
 	// (a %d format string for the message count) confirms a successful
 	// restore.
 	ResumeTitle    = "resume a session"
-	HelpResume     = "up/down move · enter resume · esc cancel"
+	HelpResume     = "up/down move · pgup/pgdn page · enter resume · esc cancel"
 	ResumeEmpty    = "no recorded sessions here · /resume --all to look wider"
 	ResumeRestored = "restored session · %d messages"
 )

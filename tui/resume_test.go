@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -261,6 +262,49 @@ func TestResumeDialogKeyboardNavigation(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Error("picking a session should return the re-init cmd")
+	}
+}
+
+// TestResumeDialogPaging: pgup/pgdn move the picker a window at a time. The
+// spec asked for paging and only up/down was ever wired, so SelectList.Page
+// had no caller outside its own unit test — a user with forty stored sessions
+// arrowed through them one row at a time.
+func TestResumeDialogPaging(t *testing.T) {
+	sessions := make([]chat.SessionRecord, 40)
+	for i := range sessions {
+		sessions[i] = chat.SessionRecord{ID: "s" + strconv.Itoa(i), Title: "convo " + strconv.Itoa(i)}
+	}
+	const window = 8
+	m := newTestModel(Model{
+		textarea:       textarea.New(),
+		viewport:       viewport.New(80, 20),
+		width:          80,
+		awaitingResume: true,
+		resumeSessions: sessions,
+		resumeList:     &render.SelectList{Items: resumeItems(sessions), MaxVisible: window},
+		presenter:      testPresenter(),
+	})
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	nm := next.(Model)
+	if nm.resumeList.Selected != window {
+		t.Fatalf("PgDown selected row %d, want %d (one window down)", nm.resumeList.Selected, window)
+	}
+	if cmd != nil {
+		t.Error("paging should not itself return a cmd")
+	}
+
+	next, _ = nm.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	nm = next.(Model)
+	if nm.resumeList.Selected != 0 {
+		t.Fatalf("PgUp selected row %d, want 0 (back one window)", nm.resumeList.Selected)
+	}
+
+	// Clamping, not wrapping: a page off the top stays on the first row.
+	next, _ = nm.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	nm = next.(Model)
+	if nm.resumeList.Selected != 0 {
+		t.Errorf("PgUp at the top wrapped to row %d, want it clamped at 0", nm.resumeList.Selected)
 	}
 }
 

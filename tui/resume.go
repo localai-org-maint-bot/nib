@@ -258,8 +258,12 @@ func (m Model) cancelResume() (tea.Model, tea.Cmd) {
 }
 
 // handleListDialogKey applies the navigation shared by every keyboard-driven
-// list dialog: up/down move the selection, space toggles a multi-select
-// check, and Esc invokes onEsc. It returns handled=false for any other key
+// list dialog: up/down move the selection one row (wrapping), pgup/pgdn move
+// it one window's worth (clamping — see SelectList.Page), space toggles a
+// multi-select check, and Esc invokes onEsc. Paging is what makes a list of
+// forty stored sessions navigable at all; without it the only way down the
+// list was one arrow press at a time, and SelectList.Page had no non-test
+// caller. It returns handled=false for any other key
 // (including Enter), which every call site resolves itself — ask_user
 // (tui/model.go) must also accept a free-text answer and hand off to a
 // blocking channel, and the /resume picker (below) has no free-text
@@ -284,6 +288,10 @@ func (m Model) handleListDialogKey(msg tea.KeyMsg, list *render.SelectList, onEs
 		list.Move(-1)
 	case tea.KeyDown:
 		list.Move(1)
+	case tea.KeyPgUp:
+		list.Page(-1)
+	case tea.KeyPgDown:
+		list.Page(1)
 	case tea.KeySpace:
 		if !list.MultiSelect {
 			return m, nil, false
