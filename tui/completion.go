@@ -137,6 +137,18 @@ func (c *compState) accept() (string, bool) {
 	return it.Insert, true
 }
 
+// exact reports whether input already equals the sole remaining match's
+// verb ("/yolo" against a single "yolo" match, say) — nothing is left to
+// complete, so a caller like KeyEnter should submit rather than accept.
+// Multi-match popups always return false here: with more than one candidate
+// live, Enter still means "pick the highlighted one".
+func (c *compState) exact(input string) bool {
+	if len(c.matches) != 1 {
+		return false
+	}
+	return input == "/"+c.matches[0].Name
+}
+
 // ghost returns the suffix of the selected item's Insert beyond the current
 // input (the dim hint shown to the user). Empty if no clean continuation.
 func (c *compState) ghost(input string) string {

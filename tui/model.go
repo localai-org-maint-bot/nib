@@ -810,8 +810,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyEnter:
-			// Accept an open completion instead of submitting.
-			if m.completion.active {
+			// Accept an open completion instead of submitting — unless the
+			// typed text already equals the sole remaining match exactly
+			// ("/yolo" with only "yolo" left to match). At that point there
+			// is nothing left to complete, so accepting would just insert a
+			// trailing space and eat the keypress; fall through to submit
+			// instead. A genuine prefix ("/yo") or a multi-match popup still
+			// accepts as before.
+			if m.completion.active && !m.completion.exact(m.textarea.Value()) {
 				if ins, ok := m.completion.accept(); ok {
 					m.textarea.SetValue(ins)
 					m.completion.sync(ins)

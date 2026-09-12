@@ -3,6 +3,10 @@ package tui
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
 )
 
@@ -139,5 +143,150 @@ func TestBuiltinsCoverTheModelVerbs(t *testing.T) {
 	// Typing "/model" must offer both, so the list verb stays reachable.
 	if got := filterComp(items, "model"); len(got) != 2 {
 		t.Fatalf("filter 'model' should surface both verbs, got %+v", got)
+	}
+}
+
+// The four Enter-vs-completion cases below drive real tea.KeyMsg values
+// through Update, the way ask_test.go and scroll_test.go do, and assert the
+// DISPATCH happened (session state flipped, a transcript message landed) —
+// not merely that the textarea contents changed, since a swallowed Enter
+// would still leave the composer looking "handled".
+
+// TestEnterCompletionExactVerbSubmits is the regression case: the composer
+// holds exactly "/yolo" and the popup's sole match is "yolo" itself — there
+// is nothing left to complete, so Enter must submit instead of accepting
+// (which would just insert a trailing space and eat the keypress).
+func TestEnterCompletionExactVerbSubmits(t *testing.T) {
+	m := newQueueTestModel()
+	m.session = &chat.Session{}
+	cmds, skills, agents := sampleRegistries()
+	m.completion.setRegistries(cmds, skills, agents)
+
+	m.textarea.SetValue("/yolo")
+	m.completion.sync(m.textarea.Value())
+	if !m.completion.active || len(m.completion.matches) != 1 {
+		t.Fatalf("fixture: want popup active with sole match, got active=%v matches=%d", m.completion.active, len(m.completion.matches))
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		cmd()
+	}
+	nm := next.(Model)
+
+	if !nm.session.AutoApprove() {
+		t.Fatal("exact '/yolo' + Enter should submit and toggle auto-approve, not just accept the completion")
+	}
+	msg := lastMessage(t, nm)
+	if msg.Content != theme.YoloOn {
+		t.Fatalf("notice = %q, want %q", msg.Content, theme.YoloOn)
+	}
+}
+
+// TestEnterCompletionPrefixStillCompletes guards the feature this fix must
+// not break: a genuine prefix still completes on Enter rather than
+// submitting the partial verb.
+func TestEnterCompletionPrefixStillCompletes(t *testing.T) {
+	m := newQueueTestModel()
+	m.session = &chat.Session{}
+	cmds, skills, agents := sampleRegistries()
+	m.completion.setRegistries(cmds, skills, agents)
+
+	m.textarea.SetValue("/yo")
+	m.completion.sync(m.textarea.Value())
+	if !m.completion.active || len(m.completion.matches) != 1 {
+		t.Fatalf("fixture: want popup active with sole match, got active=%v matches=%d", m.completion.active, len(m.completion.matches))
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("completing a prefix must not start a turn")
+	}
+	nm := next.(Model)
+
+	if got := nm.textarea.Value(); got != "/yolo " {
+		t.Fatalf("textarea = %q, want %q", got, "/yolo ")
+	}
+	if nm.session.AutoApprove() {
+		t.Fatal("prefix completion must not dispatch /yolo")
+	}
+	if len(nm.messages) != 0 {
+		t.Fatalf("prefix completion must not post any message, got %+v", nm.messages)
+	}
+}
+
+// TestEnterCompletionMultiMatchAcceptsHighlighted covers a popup with several
+// live matches: Enter must still accept the highlighted one rather than
+// submit the ambiguous partial verb.
+func TestEnterCompletionMultiMatchAcceptsHighlighted(t *testing.T) {
+	m := newQueueTestModel()
+	m.session = &chat.Session{}
+	cmds, skills, agents := sampleRegistries()
+	m.completion.setRegistries(cmds, skills, agents)
+
+	m.textarea.SetValue("/re")
+	m.completion.sync(m.textarea.Value())
+	if !m.completion.active || len(m.completion.matches) < 2 {
+		t.Fatalf("fixture: want popup active with multiple matches, got active=%v matches=%d", m.completion.active, len(m.completion.matches))
+	}
+	want := m.completion.matches[m.completion.sel].Insert
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("accepting from a multi-match popup must not start a turn")
+	}
+	nm := next.(Model)
+	if got := nm.textarea.Value(); got != want {
+		t.Fatalf("textarea = %q, want %q", got, want)
+	}
+	if len(nm.messages) != 0 {
+		t.Fatalf("accepting from a multi-match popup must not dispatch, got %+v", nm.messages)
+	}
+}
+
+// TestEnterCompletionEmptyComposerNoOp and
+// TestEnterCompletionInactiveSubmitsNormally cover "nothing typed, or no
+// popup -> unchanged": the exact-match guard must never engage when there is
+// no active completion to suppress.
+func TestEnterCompletionEmptyComposerNoOp(t *testing.T) {
+	m := newQueueTestModel()
+	m.session = &chat.Session{}
+	cmds, skills, agents := sampleRegistries()
+	m.completion.setRegistries(cmds, skills, agents)
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("empty composer should not start a turn")
+	}
+	nm := next.(Model)
+	if len(nm.messages) != 0 {
+		t.Fatalf("empty Enter must not post any message, got %+v", nm.messages)
+	}
+	if nm.completion.active {
+		t.Fatal("popup should not activate for an empty composer")
+	}
+}
+
+func TestEnterCompletionInactiveSubmitsNormally(t *testing.T) {
+	m := newQueueTestModel()
+	m.session = &chat.Session{}
+	cmds, skills, agents := sampleRegistries()
+	m.completion.setRegistries(cmds, skills, agents)
+
+	// A trailing argument deactivates the popup (sync() turns off once a
+	// space is typed), so this exercises the "no popup" half of the case.
+	m.textarea.SetValue("/yolo on")
+	m.completion.sync(m.textarea.Value())
+	if m.completion.active {
+		t.Fatal("fixture: popup should be inactive once a space is typed")
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("/yolo on must not start a turn")
+	}
+	nm := next.(Model)
+	if !nm.session.AutoApprove() {
+		t.Fatal("explicit '/yolo on' should submit and turn auto-approve on")
 	}
 }
