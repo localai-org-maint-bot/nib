@@ -66,6 +66,14 @@ func (s *SessionStore) Save(rec SessionRecord) error {
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return fmt.Errorf("sessionstore: create %s: %w", s.Dir, err)
 	}
+	// MkdirAll does NOT chmod a directory that already exists — a directory
+	// left behind 0o755 by an earlier build of this store (before this file
+	// used 0o700) would stay world-readable forever otherwise. Chmod is
+	// defensive and idempotent, so it runs unconditionally on every Save
+	// rather than only after a fresh MkdirAll.
+	if err := os.Chmod(s.Dir, 0o700); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("sessionstore: chmod %s: %w", s.Dir, err)
+	}
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("sessionstore: marshal %s: %w", rec.ID, err)

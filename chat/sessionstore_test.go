@@ -152,6 +152,30 @@ func TestSessionStoreSaveCreatesPrivateDirectory(t *testing.T) {
 	}
 }
 
+// TestSessionStoreSaveTightensExistingPermissiveDirectory covers the case
+// os.MkdirAll alone cannot: MkdirAll does NOT chmod a directory that already
+// exists. A sessions directory created 0755 by an earlier build of this
+// branch (before the 0700 fix) would stay world-readable forever — these
+// files hold full conversation transcripts — unless Save actively tightens
+// it back down on every call.
+func TestSessionStoreSaveTightensExistingPermissiveDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewSessionStore(dir)
+	mustSave(t, store, SessionRecord{ID: "a", Cwd: "/p", Updated: time.Now()})
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Errorf("sessions directory mode after Save = %o, want 0700 (Save must tighten a pre-existing permissive directory)", got)
+	}
+}
+
 func TestSessionStoreLoadMissingIsAnError(t *testing.T) {
 	store := NewSessionStore(t.TempDir())
 	if _, err := store.Load("nope"); err == nil {
