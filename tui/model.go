@@ -361,6 +361,13 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		maxH = 0 // Will be calculated on first WindowSizeMsg
 	}
 
+	// Rooted at the per-user BaseDir, not the process's cwd — see the store
+	// field's own comment on the Model literal below for why. MaxSessions
+	// applies cfg.SessionRetention (0 leaves chat.DefaultMaxSessions, 200, in
+	// effect — see SessionStore.maxSessions).
+	sessionStore := chat.NewSessionStore(filepath.Join(plugin.BaseDirIn(cfg.BaseDir), "sessions"))
+	sessionStore.MaxSessions = cfg.SessionRetention
+
 	m := Model{
 		viewport:           vp,
 		logVP:              viewport.New(80, 10),
@@ -399,7 +406,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		// widen TO — if every project's sessions land in one shared store
 		// that a Cwd field can then filter, rather than each project cwd
 		// getting its own separate, mutually invisible .nib/sessions folder.
-		store:          chat.NewSessionStore(filepath.Join(plugin.BaseDirIn(cfg.BaseDir), "sessions")),
+		store:          sessionStore,
 		sessionID:      cfg.ResumeSessionID,
 		sessionTitle:   cfg.ResumeSessionTitle,
 		sessionCreated: time.Now(),

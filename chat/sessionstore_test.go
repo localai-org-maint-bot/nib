@@ -227,3 +227,172 @@ func mustSave(t *testing.T, s *SessionStore, rec SessionRecord) {
 		t.Fatal(err)
 	}
 }
+
+// TestSessionStoreDefaultMaxSessionsIs200 pins the decided default (Task 20
+// brief): a store with MaxSessions unset caps at 200, not unlimited.
+func TestSessionStoreDefaultMaxSessionsIs200(t *testing.T) {
+	if DefaultMaxSessions != 200 {
+		t.Fatalf("DefaultMaxSessions = %d, want 200", DefaultMaxSessions)
+	}
+	store := NewSessionStore(t.TempDir())
+	if got := store.maxSessions(); got != DefaultMaxSessions {
+		t.Errorf("maxSessions() with MaxSessions unset = %d, want %d", got, DefaultMaxSessions)
+	}
+}
+
+// TestSessionStoreMaxSessionsIsConfigurable proves the cap can be overridden
+// per store (the config knob wires this field — see types.Config.SessionRetention).
+func TestSessionStoreMaxSessionsIsConfigurable(t *testing.T) {
+	store := NewSessionStore(t.TempDir())
+	store.MaxSessions = 5
+	if got := store.maxSessions(); got != 5 {
+		t.Errorf("maxSessions() with MaxSessions=5 = %d, want 5", got)
+	}
+}
+
+// TestSessionStoreSavePrunesBeyondCap proves Save prunes down to the
+// configured cap, keeping the most recently written sessions. Ordering here
+// relies on each sequential Save producing a strictly newer file mtime than
+// the last (nanosecond-resolution filesystem timestamps), which is what
+// prune actually keys off — see prune's doc comment for why content-level
+// Updated is not used.
+func TestSessionStoreSavePrunesBeyondCap(t *testing.T) {
+	dir := t.TempDir()
+	store := NewSessionStore(dir)
+	// Large during setup: nothing should be pruned yet while mtimes below are
+	// being staggered explicitly. Real wall-clock mtimes are not trustworthy
+	// enough here to order five back-to-back saves (some filesystems/CI
+	// sandboxes truncate mtime resolution), so pin them with os.Chtimes
+	// instead of relying on save order.
+	store.MaxSessions = 100
+
+	ids := []string{"a", "b", "c", "d", "e"}
+	base := time.Now().Add(-time.Hour)
+	for i, id := range ids {
+		mustSave(t, store, SessionRecord{ID: id, Cwd: "/p"})
+		mt := base.Add(time.Duration(i) * time.Minute)
+		if err := os.Chtimes(filepath.Join(dir, id+".json"), mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Now impose the real cap and trigger one more prune pass by saving a
+	// sixth session, whose real (current) mtime is newer than every staggered
+	// one above.
+	store.MaxSessions = 3
+	mustSave(t, store, SessionRecord{ID: "f", Cwd: "/p"})
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("directory has %d files after pruning to cap 3, want 3: %v", len(entries), entries)
+	}
+	for _, want := range []string{"d.json", "e.json", "f.json"} {
+		found := false
+		for _, e := range entries {
+			if e.Name() == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected %s to survive pruning (newest 3), directory = %v", want, entries)
+		}
+	}
+	for _, gone := range []string{"a.json", "b.json", "c.json"} {
+		if _, err := os.Stat(filepath.Join(dir, gone)); !os.IsNotExist(err) {
+			t.Errorf("expected %s to be pruned away, stat err = %v", gone, err)
+		}
+	}
+}
+
+// TestSessionStorePruneNeverDeletesTheExemptSession is the sharpest form of
+// the Task 20 brief's central danger: "pruning must never delete the session
+// currently being written." A naive prune (sort everyone including the
+// current session by recency, drop the tail) would delete the just-written
+// file if its timestamp did not happen to sort as newest — e.g. clock skew,
+// or (as forced here) a filesystem that reports a stale mtime for it. prune's
+// keepID parameter must exclude it from candidacy outright, not rely on it
+// naturally sorting to the top.
+func TestSessionStorePruneNeverDeletesTheExemptSession(t *testing.T) {
+	dir := t.TempDir()
+	store := NewSessionStore(dir)
+	// Large during setup so these three saves' own automatic pruning does not
+	// remove anything before the real test (a manual, tightly-capped prune
+	// call below) runs.
+	store.MaxSessions = 100
+
+	mustSave(t, store, SessionRecord{ID: "current", Cwd: "/p"})
+	mustSave(t, store, SessionRecord{ID: "other-a", Cwd: "/p"})
+	mustSave(t, store, SessionRecord{ID: "other-b", Cwd: "/p"})
+
+	// Make "current" look like the OLDEST file on disk — everything else is
+	// now unambiguously newer than it by mtime.
+	old := time.Now().Add(-24 * time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, "current.json"), old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// Exercise prune directly with "current" as the exempt id and a tight
+	// cap, exactly as Save(rec) would for rec.ID == "current" — this is the
+	// call a save-in-progress makes about itself.
+	store.MaxSessions = 1
+	store.prune("current")
+
+	if _, err := os.Stat(filepath.Join(dir, "current.json")); err != nil {
+		t.Fatalf("prune deleted the exempt current session despite it looking oldest: %v", err)
+	}
+}
+
+// TestSessionStorePruneSkipsCorruptFile proves a malformed session file does
+// not block a prune pass (mirroring TestSessionStoreListSkipsCorruptFile for
+// List): Save must still succeed and still prune the well-formed files down
+// to cap despite an unparseable one sitting in the directory. prune never
+// parses JSON (it sorts by file mtime, not content — see its doc comment),
+// so this also pins that contract from the outside.
+func TestSessionStorePruneSkipsCorruptFile(t *testing.T) {
+	dir := t.TempDir()
+	store := NewSessionStore(dir)
+	store.MaxSessions = 1
+
+	if err := os.WriteFile(filepath.Join(dir, "corrupt.json"), []byte("{not valid json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Save(SessionRecord{ID: "current", Cwd: "/p"}); err != nil {
+		t.Fatalf("Save returned an error because of an unrelated corrupt file: %v", err)
+	}
+}
+
+// TestSessionStoreDeleteRemovesExactlyOneFile proves Delete removes only the
+// named session's file, leaving the rest of the store untouched.
+func TestSessionStoreDeleteRemovesExactlyOneFile(t *testing.T) {
+	dir := t.TempDir()
+	store := NewSessionStore(dir)
+	mustSave(t, store, SessionRecord{ID: "a", Cwd: "/p"})
+	mustSave(t, store, SessionRecord{ID: "b", Cwd: "/p"})
+	mustSave(t, store, SessionRecord{ID: "c", Cwd: "/p"})
+
+	if err := store.Delete("b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "b.json")); !os.IsNotExist(err) {
+		t.Errorf("Delete did not remove b.json: stat err = %v", err)
+	}
+	for _, id := range []string{"a", "c"} {
+		if _, err := os.Stat(filepath.Join(dir, id+".json")); err != nil {
+			t.Errorf("Delete removed an unrelated file %s: %v", id, err)
+		}
+	}
+}
+
+// TestSessionStoreDeleteMissingIsNotAnError matches Delete's non-fatal
+// contract to the rest of the store: deleting an already-gone session (e.g. a
+// picker racing a concurrent prune) is not an error.
+func TestSessionStoreDeleteMissingIsNotAnError(t *testing.T) {
+	store := NewSessionStore(t.TempDir())
+	if err := store.Delete("nope"); err != nil {
+		t.Errorf("deleting an already-gone session should not error, got %v", err)
+	}
+}

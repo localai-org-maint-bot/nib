@@ -10,6 +10,8 @@ import (
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
+
+	"github.com/mudler/xlog"
 )
 
 // SessionRecord is one recorded conversation: enough to repopulate
@@ -36,12 +38,34 @@ type SessionRecord struct {
 // to widen to) and makes the Cwd field below pointless (every session in one
 // folder would share the same Cwd by construction). Dir is created on first
 // Save; List and Load tolerate it not existing yet.
-type SessionStore struct{ Dir string }
+type SessionStore struct {
+	Dir string
+	// MaxSessions caps how many session files Save keeps after pruning; 0
+	// (the zero value, so a bare NewSessionStore(dir) needs no extra wiring)
+	// means DefaultMaxSessions. Set this after construction — e.g. from
+	// types.Config.SessionRetention — to make the cap configurable.
+	MaxSessions int
+}
+
+// DefaultMaxSessions is how many recorded sessions Save keeps once
+// MaxSessions is unset: the decided default (Task 20) balancing "the picker
+// stays useful" against "~/.config/nib/sessions/*.json accumulating forever,
+// each holding a full transcript".
+const DefaultMaxSessions = 200
 
 // NewSessionStore returns a store rooted at dir. dir is not created until the
 // first Save.
 func NewSessionStore(dir string) *SessionStore {
 	return &SessionStore{Dir: dir}
+}
+
+// maxSessions resolves the effective cap: MaxSessions if set, else
+// DefaultMaxSessions.
+func (s *SessionStore) maxSessions() int {
+	if s.MaxSessions > 0 {
+		return s.MaxSessions
+	}
+	return DefaultMaxSessions
 }
 
 func (s *SessionStore) path(id string) string {
@@ -98,6 +122,89 @@ func (s *SessionStore) Save(rec SessionRecord) error {
 	if err := os.Rename(tmpPath, s.path(rec.ID)); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("sessionstore: rename %s: %w", rec.ID, err)
+	}
+	// Prune AFTER the rename above has landed, and pass rec.ID as the
+	// exemption: this Save just made rec.ID's file the newest thing in the
+	// directory, but exempting it EXPLICITLY (rather than trusting it to sort
+	// first) is what keeps a save from ever racing its own prune pass into
+	// deleting the file it just wrote. See prune's doc comment.
+	//
+	// Non-fatal by design, like every other failure mode in Save being
+	// reported vs. this one being swallowed: a save that wrote successfully
+	// must not fail (and so must not be retried, dropping the write) just
+	// because disk cleanup of OLD sessions hit a snag. prune logs its own
+	// per-file failures.
+	s.prune(rec.ID)
+	return nil
+}
+
+// prune deletes the oldest session files once there are more than
+// maxSessions() of them, exempting keepID unconditionally — see Save's call
+// site for why that exemption must be explicit rather than incidental.
+//
+// It orders candidates by each FILE's mtime, not by unmarshaling every
+// session's Updated field: os.ReadDir + DirEntry.Info() costs one lightweight
+// stat per file, versus opening, reading and json-decoding every stored
+// transcript on every single Save (what List does, and what pruning would
+// cost if it reused List). mtime is what Save's own os.Rename just set for
+// the file this exact call is about, so "newest by mtime" already means
+// "most recently saved" to sub-second precision — content is not needed to
+// answer that question. This also means a corrupt/unparseable session file
+// never blocks pruning: prune never parses it in the first place.
+func (s *SessionStore) prune(keepID string) {
+	entries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		return // best-effort; a listing failure here must not fail Save
+	}
+	type candidate struct {
+		path    string
+		id      string
+		modTime time.Time
+	}
+	var candidates []candidate
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".json")
+		if id == keepID {
+			continue // never a pruning candidate, regardless of its mtime
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue // gone or unreadable between ReadDir and here; skip it
+		}
+		candidates = append(candidates, candidate{
+			path:    filepath.Join(s.Dir, e.Name()),
+			id:      id,
+			modTime: info.ModTime(),
+		})
+	}
+	// keepID (if it exists on disk) always survives on top of this budget, so
+	// the cap applies to keepID + the newest (max-1) others.
+	keepOthers := s.maxSessions() - 1
+	if keepOthers < 0 {
+		keepOthers = 0
+	}
+	if len(candidates) <= keepOthers {
+		return
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].modTime.After(candidates[j].modTime) })
+	for _, c := range candidates[keepOthers:] {
+		if err := os.Remove(c.path); err != nil && !os.IsNotExist(err) {
+			xlog.Warn("session prune: remove failed", "id", c.id, "error", err)
+		}
+	}
+}
+
+// Delete removes one stored session by id — the /resume picker's delete
+// affordance (tui/resume.go). A missing file is not an error: the caller
+// (already showing a list built from an earlier List() call) may be acting
+// on a session a concurrent prune or another delete already removed, and
+// that is exactly the outcome it wanted anyway.
+func (s *SessionStore) Delete(id string) error {
+	if err := os.Remove(s.path(id)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("sessionstore: delete %s: %w", id, err)
 	}
 	return nil
 }

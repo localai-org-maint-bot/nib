@@ -247,6 +247,13 @@ type Config struct {
 	Computer ComputerConfig `yaml:"-"`
 	// Browser is the opt-in browser-automation capability (chromedp-driven).
 	Browser BrowserConfig `yaml:"browser,omitempty"`
+	// SessionRetention caps how many recorded /resume sessions
+	// (chat.SessionStore, ~/.config/nib/sessions/*.json — each a full
+	// conversation transcript) are kept; the oldest beyond this count are
+	// pruned on every save, except the session currently being written
+	// (chat.SessionStore.prune's keepID). 0 (unset) means the store's own
+	// default, chat.DefaultMaxSessions (200).
+	SessionRetention int `yaml:"session_retention,omitempty"`
 }
 
 type PromptInjectionProtectionConfig struct {
