@@ -244,6 +244,70 @@ func TestEnterCompletionMultiMatchAcceptsHighlighted(t *testing.T) {
 	}
 }
 
+// TestEnterCompletionModelModelsExactSelectionSubmits and
+// TestEnterCompletionModelModelsOtherSelectionCompletes close a real gap in
+// the multi-match case: the live built-in list has a genuine prefix pair,
+// "/model" and "/models" (tui/completion.go's buildCompItems), so typing the
+// shorter verb in full still produces TWO matches from filterComp's
+// substring search. Gating exact() on "len(matches) == 1" would miss this
+// entirely and reintroduce the double-Enter papercut for "/model" — exact()
+// must instead compare against whichever match is currently SELECTED. These
+// use the real built-in list (setRegistries(nil, nil, nil)), not the
+// review/reviewer fixture pair, so the actual shipped collision is
+// exercised.
+func TestEnterCompletionModelModelsExactSelectionSubmits(t *testing.T) {
+	m := newModelSwitchTestModel(t, "model-a", "model-b")
+	m.completion.setRegistries(nil, nil, nil)
+
+	m.textarea.SetValue("/model")
+	m.completion.sync(m.textarea.Value())
+	if !m.completion.active || len(m.completion.matches) != 2 {
+		t.Fatalf("fixture: want the model/models prefix pair, got active=%v matches=%d", m.completion.active, len(m.completion.matches))
+	}
+	if got := m.completion.matches[m.completion.sel].Name; got != "model" {
+		t.Fatalf("fixture: want the selection to start on the exact match 'model', got %q", got)
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		cmd()
+	}
+	nm := next.(Model)
+
+	if got := nm.textarea.Value(); got != "" {
+		t.Fatalf("exact '/model' + Enter should submit and clear the composer, got %q", got)
+	}
+	msg := lastMessage(t, nm)
+	if msg.Role != "agent" {
+		t.Fatalf("exact '/model' + Enter should dispatch and post the model listing, got role %q content %q", msg.Role, msg.Content)
+	}
+}
+
+func TestEnterCompletionModelModelsOtherSelectionCompletes(t *testing.T) {
+	m := newModelSwitchTestModel(t, "model-a", "model-b")
+	m.completion.setRegistries(nil, nil, nil)
+
+	m.textarea.SetValue("/model")
+	m.completion.sync(m.textarea.Value())
+	m.completion.down() // move the selection off "model" and onto "models"
+	if got := m.completion.matches[m.completion.sel].Name; got != "models" {
+		t.Fatalf("fixture: want the selection moved to 'models', got %q", got)
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("completing to a different match must not start a turn")
+	}
+	nm := next.(Model)
+
+	if got := nm.textarea.Value(); got != "/models " {
+		t.Fatalf("textarea = %q, want %q", got, "/models ")
+	}
+	if len(nm.messages) != 0 {
+		t.Fatalf("completing to a different match must not dispatch, got %+v", nm.messages)
+	}
+}
+
 // TestEnterCompletionEmptyComposerNoOp and
 // TestEnterCompletionInactiveSubmitsNormally cover "nothing typed, or no
 // popup -> unchanged": the exact-match guard must never engage when there is
