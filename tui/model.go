@@ -25,6 +25,7 @@ import (
 	"github.com/mudler/nib/loop"
 	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/slash"
+	"github.com/mudler/nib/tui/render"
 )
 
 // ChatMessage represents a message in the chat history
@@ -1143,7 +1144,7 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		case errors.As(err, &unserved):
 			// Two transcript lines, not one. The refusal itself is prose and
 			// wraps happily, but the listing must not: an "error" line goes
-			// through wrapText, which re-flows on word boundaries, drops the
+			// through render.Wrap, which re-flows on word boundaries, drops the
 			// leading indent and clips a long model ID, so at a narrow width
 			// the marker column stops meaning anything.
 			m.messages = append(m.messages,
@@ -1449,112 +1450,10 @@ func (m *Model) updateDimensions() {
 	m.textarea.SetWidth(m.width - 2)
 }
 
-// truncateLine caps a single line at w runes, ending with an ellipsis. A
-// non-positive budget returns the bare ellipsis rather than an unclamped line.
-func truncateLine(s string, w int) string {
-	r := []rune(s)
-	if len(r) <= w {
-		return s
-	}
-	if w <= 1 {
-		return "…"
-	}
-	return string(r[:w-1]) + "…"
-}
-
-// wrapText wraps text to fit within the specified width, preserving existing newlines
-func wrapText(text string, width int) string {
-	if width <= 0 {
-		return text
-	}
-
-	var result strings.Builder
-	lines := strings.Split(text, "\n")
-
-	for _, line := range lines {
-		if line == "" {
-			result.WriteString("\n")
-			continue
-		}
-
-		// Calculate the visual width (accounting for ANSI codes)
-		visualWidth := lipgloss.Width(line)
-		if visualWidth <= width {
-			result.WriteString(line)
-			result.WriteString("\n")
-			continue
-		}
-
-		// Need to wrap this line
-		words := strings.Fields(line)
-		if len(words) == 0 {
-			result.WriteString("\n")
-			continue
-		}
-
-		currentLine := strings.Builder{}
-		currentWidth := 0
-
-		for i, word := range words {
-			wordWidth := lipgloss.Width(word)
-
-			// If a single word is longer than width, truncate it on a rune
-			// boundary (byte slicing here would split a multibyte rune).
-			if wordWidth > width && currentWidth == 0 {
-				result.WriteString(truncateRunes(word, width))
-				result.WriteString("\n")
-				continue
-			}
-
-			if currentWidth > 0 {
-				// Check if adding this word would exceed width
-				if currentWidth+1+wordWidth > width {
-					// Write current line and start new one
-					result.WriteString(currentLine.String())
-					result.WriteString("\n")
-					currentLine.Reset()
-					currentWidth = 0
-				} else {
-					// Add space before word
-					currentLine.WriteString(" ")
-					currentWidth += 1
-				}
-			}
-
-			currentLine.WriteString(word)
-			currentWidth += wordWidth
-
-			// If this is the last word, write the line
-			if i == len(words)-1 {
-				result.WriteString(currentLine.String())
-				result.WriteString("\n")
-			}
-		}
-	}
-
-	return result.String()
-}
-
-// truncateRunes shortens word to at most width display columns, breaking on a
-// rune boundary and appending an ellipsis when there is room for it.
-func truncateRunes(word string, width int) string {
-	runes := []rune(word)
-	if width <= 0 {
-		return ""
-	}
-	if len(runes) <= width {
-		return word
-	}
-	if width <= 1 {
-		return string(runes[:width])
-	}
-	return string(runes[:width-1]) + "…"
-}
-
 // updateViewport updates the viewport content with chat messages
 // markdownFor returns a glamour renderer for the given wrap width, building and
 // caching one per distinct width. Returns nil on construction error (callers
-// fall back to plain wrapText).
+// fall back to plain render.Wrap).
 func (m *Model) markdownFor(width int) *glamour.TermRenderer {
 	if width < 1 {
 		width = 1
@@ -1607,7 +1506,7 @@ func (m *Model) renderAgentThreadRun(sb *strings.Builder, run []ChatMessage, con
 		sb.WriteString("\n")
 	}
 	for _, r := range results {
-		wrapped := wrapText(r.Content, contentWidth-5)
+		wrapped := render.Wrap(r.Content, contentWidth-5)
 		for i, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
 			if i == 0 {
 				sb.WriteString("   " + theme.Subtle.Render(theme.Arrow+" "+line))
@@ -1685,7 +1584,7 @@ func (m *Model) updateViewport() {
 		case "user":
 			prefix := userStyle.Render("you") + " " + theme.SepStyle.Render(theme.Sep) + " "
 			prefixWidth := lipgloss.Width(prefix)
-			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
+			wrappedContent := render.Wrap(msg.Content, contentWidth-prefixWidth)
 			// Add prefix to first line, indent continuation lines
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
 			for i, line := range lines {
@@ -1760,7 +1659,7 @@ func (m *Model) updateViewport() {
 			sb.WriteString(theme.Subtle.Render(theme.Sep + " " + label))
 			sb.WriteString("\n")
 			// Content is already previewed (truncated + pretty) at append time.
-			wrapped := wrapText(msg.Content, contentWidth-2)
+			wrapped := render.Wrap(msg.Content, contentWidth-2)
 			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
 				sb.WriteString("  " + theme.Help.Render(line))
 				sb.WriteString("\n")
@@ -1769,7 +1668,7 @@ func (m *Model) updateViewport() {
 		case "error":
 			prefix := errorStyle.Render(theme.Cross) + " "
 			prefixWidth := lipgloss.Width(prefix)
-			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
+			wrappedContent := render.Wrap(msg.Content, contentWidth-prefixWidth)
 			// Add prefix to first line, indent continuation lines
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
 			for i, line := range lines {
@@ -1797,7 +1696,7 @@ func (m *Model) updateViewport() {
 		sb.WriteString("\n")
 		if m.reasoning != "" {
 			sb.WriteString(theme.ReasoningHeader() + "\n")
-			wrapped := wrapText(m.reasoning, contentWidth-4)
+			wrapped := render.Wrap(m.reasoning, contentWidth-4)
 			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
 				sb.WriteString("  " + theme.Reasoning.Render(line) + "\n")
 			}
@@ -1819,17 +1718,17 @@ func (m *Model) updateViewport() {
 			}
 			for _, r := range rows {
 				key := r.Key + strings.Repeat(" ", maxKey-len(r.Key))
-				val := truncateLine(r.ValueDisplay(), contentWidth-8-maxKey)
+				val := render.TruncateLine(r.ValueDisplay(), contentWidth-8-maxKey)
 				sb.WriteString(gutter + "  " + theme.Meta.Render(key) + "  " + theme.Help.Render(val) + "\n")
 			}
 		} else {
-			args := wrapText(chat.FormatToolCall(m.pendingTool.Name, m.pendingTool.Arguments), contentWidth-4)
+			args := render.Wrap(chat.FormatToolCall(m.pendingTool.Name, m.pendingTool.Arguments), contentWidth-4)
 			for _, line := range strings.Split(strings.TrimRight(args, "\n"), "\n") {
 				sb.WriteString(gutter + theme.Help.Render(line) + "\n")
 			}
 		}
 		if m.pendingTool.Reasoning != "" {
-			rz := wrapText(m.pendingTool.Reasoning, contentWidth-4)
+			rz := render.Wrap(m.pendingTool.Reasoning, contentWidth-4)
 			for _, line := range strings.Split(strings.TrimRight(rz, "\n"), "\n") {
 				sb.WriteString(gutter + theme.Reasoning.Render(line) + "\n")
 			}

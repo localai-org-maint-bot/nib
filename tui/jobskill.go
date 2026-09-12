@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mudler/nib/theme"
+	"github.com/mudler/nib/tui/render"
 )
 
 // jobRef is a unified reference to a killable job — either a sub-agent or a
@@ -96,7 +97,7 @@ func (m *Model) syncLogViewport() {
 	if width <= 0 {
 		width = m.width
 	}
-	m.logVP.SetContent(theme.Help.Render(wrapText(content, width-1)))
+	m.logVP.SetContent(theme.Help.Render(render.Wrap(content, width-1)))
 	m.logVP.GotoBottom()
 }
 

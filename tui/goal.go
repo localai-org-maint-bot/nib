@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/mudler/nib/theme"
+	"github.com/mudler/nib/tui/render"
 )
 
 // renderGoalFooter renders a one-line indicator while a goal is active. Returns
@@ -12,6 +13,6 @@ func renderGoalFooter(goal string, width int) string {
 	if goal == "" {
 		return ""
 	}
-	line := fmt.Sprintf("%s goal: %s  (/goal clear)", theme.Goal, truncateRunes(goal, 48))
+	line := fmt.Sprintf("%s goal: %s  (/goal clear)", theme.Goal, render.TruncateRunes(goal, 48))
 	return theme.Subtle.Render(line)
 }

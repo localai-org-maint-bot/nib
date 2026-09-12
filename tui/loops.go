@@ -9,6 +9,7 @@ import (
 	"github.com/mudler/nib/loop"
 	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/theme"
+	"github.com/mudler/nib/tui/render"
 )
 
 // durationToCron maps a /loop interval to a cron expression. Sub-minute
@@ -51,7 +52,7 @@ func renderLoopsFooter(r *loop.Registry, selfPaced, width int) string {
 	}
 	var parts []string
 	for _, j := range jobs {
-		parts = append(parts, fmt.Sprintf("%s %s%s%s", j.ID, j.Expr, theme.Arrow, truncateRunes(j.Prompt, 24)))
+		parts = append(parts, fmt.Sprintf("%s %s%s%s", j.ID, j.Expr, theme.Arrow, render.TruncateRunes(j.Prompt, 24)))
 	}
 	if selfPaced > 0 {
 		parts = append(parts, fmt.Sprintf("%d self-paced", selfPaced))
