@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -369,9 +370,44 @@ func mustSaveTUI(t *testing.T, s *chat.SessionStore, rec chat.SessionRecord) {
 
 // TestHelpResumeAdvertisesDelete pins the Task 20 requirement that the delete
 // key be advertised in the picker's help copy, not just implemented silently.
+// Comparing against fmt.Sprintf("%c delete", resumeDeleteKey) — the actual
+// constant Update's keypress guard tests (tui/model.go) — rather than the
+// literal "d delete" ties this to the real binding: the original form of
+// this test was a copy string checked against a hand-typed copy of itself,
+// so renaming resumeDeleteKey without updating this literal would leave a
+// green suite advertising the wrong key. TestResumeDeleteKeyPressArms below
+// covers the other half: that the advertised key is the one that actually
+// arms deletion.
 func TestHelpResumeAdvertisesDelete(t *testing.T) {
-	if !strings.Contains(theme.HelpResume, "d delete") {
-		t.Errorf("theme.HelpResume = %q, want it to advertise the delete key", theme.HelpResume)
+	want := fmt.Sprintf("%c delete", resumeDeleteKey)
+	if !strings.Contains(theme.HelpResume, want) {
+		t.Errorf("theme.HelpResume = %q, want it to advertise the delete key as %q", theme.HelpResume, want)
+	}
+}
+
+// TestResumeDeleteKeyPressArms drives resumeDeleteKey itself (not a
+// hand-typed 'd' rune) through Update and confirms it is the key Update's
+// guard actually recognizes as the delete-arm trigger — closing the loop
+// with TestHelpResumeAdvertisesDelete above so a future rename of
+// resumeDeleteKey cannot drift from either the advertised copy or the real
+// binding without a test failing somewhere.
+func TestResumeDeleteKeyPressArms(t *testing.T) {
+	dir := t.TempDir()
+	store := chat.NewSessionStore(dir)
+	mustSaveTUI(t, store, chat.SessionRecord{ID: "alpha", Cwd: "/p"})
+	sessions := []chat.SessionRecord{{ID: "alpha"}}
+
+	m := newTestModel(Model{
+		store: store, textarea: textarea.New(), viewport: viewport.New(80, 20), width: 80,
+		awaitingResume: true, resumeSessions: sessions,
+		resumeList: &render.SelectList{Items: resumeItems(sessions)},
+		presenter:  testPresenter(),
+	})
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{resumeDeleteKey}})
+	nm := next.(Model)
+	if !nm.resumeDeleteArmed {
+		t.Fatal("pressing resumeDeleteKey should arm the delete confirm")
 	}
 }
 

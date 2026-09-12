@@ -270,6 +270,12 @@ func (m Model) cancelResume() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// resumeDeleteKey is the /resume picker's delete key (Task 20) — named so
+// the keypress guard in Update and theme.HelpResume's advertised key can
+// both be tied to the same identifier instead of two independently
+// hand-typed 'd' literals silently drifting apart.
+const resumeDeleteKey = 'd'
+
 // handleResumeDeleteKey implements the /resume picker's delete affordance
 // (Task 20) as a two-keypress confirm rather than an undo: chat/session-
 // store.go has no trash or soft-delete, so Delete removes the file outright

@@ -687,7 +687,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// every other picker shortcut it only claims the key while the
 			// composer is empty (mirroring handleListDialogKey's own guard),
 			// so a free-text 'd' elsewhere in the app is unaffected.
-			if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'd' && strings.TrimSpace(m.textarea.Value()) == "" {
+			if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == resumeDeleteKey && strings.TrimSpace(m.textarea.Value()) == "" {
 				return m.handleResumeDeleteKey()
 			}
 			// A pending delete confirm is cancelled by anything other than the
