@@ -1,27 +1,60 @@
 package full
 
 import (
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/tui/render"
 )
+
+var ansiEscape = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// stripANSI removes SGR escape sequences so a prefix check measures only
+// visible runes — mirrors tui/render/conformance_test.go's helper of the same
+// name.
+func stripANSI(s string) string {
+	return ansiEscape.ReplaceAllString(s, "")
+}
 
 // TestMessageRendersRolePrefixes pins each role's chrome. RoleUser/
 // RoleAssistant were both a word label before Phase 3 Task 12 ("you"/
 // theme.BrandName); this surface now marks them with theme.MsgGutter instead
 // (see TestFullUsesGutterNotLabels for the negative half — that the label is
 // gone). RoleError is untouched by that task, so it keeps its label check.
+//
+// user and assistant assert against the fully STYLED prefix (theme.LabelYou
+// vs theme.Gutter around the same glyph), not merely the bare glyph's
+// presence: the spec requires the gutter be "coloured per role", and a bare
+// substring check on the shared glyph would still pass if the two roles'
+// styles were swapped by mistake (review finding — a prior version of this
+// test asserted plain theme.MsgGutter for both cases, which could not tell
+// the two branches of full.go's contentPrefix apart).
+//
+// The color profile is forced to termenv.TrueColor for the duration of this
+// test: go test's stdout is not a tty, so lipgloss's default profile
+// detection strips all SGR codes, and EVERY style's Render degrades to the
+// same plain glyph — a swapped LabelYou/Gutter would then produce identical
+// "want" strings and pass unnoticed. This was caught only by deliberately
+// swapping the two styles in full.go and observing this test stay green
+// (see the task report's RED evidence) before this fix was added.
 func TestMessageRendersRolePrefixes(t *testing.T) {
+	prevProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prevProfile) })
+
 	p := New()
 	cases := []struct {
 		name string
 		msg  render.Message
 		want string
 	}{
-		{"user", render.Message{Role: render.RoleUser, Content: "hi"}, theme.MsgGutter},
-		{"assistant", render.Message{Role: render.RoleAssistant, Content: "hi"}, theme.MsgGutter},
+		{"user", render.Message{Role: render.RoleUser, Content: "hi"}, theme.LabelYou.Render(theme.MsgGutter) + " "},
+		{"assistant", render.Message{Role: render.RoleAssistant, Content: "hi"}, theme.Gutter.Render(theme.MsgGutter) + " "},
 		{"error", render.Message{Role: render.RoleError, Content: "boom"}, theme.Cross},
 	}
 	for _, c := range cases {
@@ -52,6 +85,10 @@ func TestFullUsesGutterNotLabels(t *testing.T) {
 // indents continuation lines to the label's width with blank spaces), this
 // surface's gutter is a colour bar that must mark EVERY line of the block, or
 // wrapped content past the first line would read as unattributed.
+//
+// Asserted with HasPrefix on the ANSI-stripped line, not Contains: a
+// left-edge gutter must sit at the left edge. A bare Contains check would
+// also pass a regression that pushed the gutter mid-line (review finding).
 func TestContinuationLinesCarryTheGutter(t *testing.T) {
 	p := New()
 	out := p.Message(render.Message{
@@ -63,8 +100,8 @@ func TestContinuationLinesCarryTheGutter(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("expected wrapped output, got %d line(s)", len(lines))
 	}
-	if !strings.Contains(lines[1], theme.MsgGutter) {
-		t.Errorf("continuation line does not carry the gutter: %q", lines[1])
+	if !strings.HasPrefix(stripANSI(lines[1]), theme.MsgGutter) {
+		t.Errorf("continuation line does not lead with the gutter: %q", lines[1])
 	}
 }
 

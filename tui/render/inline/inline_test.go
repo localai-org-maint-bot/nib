@@ -82,28 +82,50 @@ func TestInlineOmitsPrefixOnConsecutiveSameRole(t *testing.T) {
 // standing in for the label on a consecutive message must be the exact same
 // width as the label itself, or a run's content would drift out of column
 // the moment it stopped being the first message.
+//
+// Covers both RoleUser and RoleAssistant: messagePrefix is one shared
+// function branching on role, but a table missing either role would leave
+// that role's own width-agreement unpinned. This matters more than usual for
+// RoleUser specifically — a live multi-turn session could reproduce a
+// genuine consecutive-ASSISTANT run (via mid-run message injection) but not a
+// genuine consecutive-USER one in the time available (see the report), so
+// this case is the only place that path is exercised at all, live or
+// otherwise. (A prior version of this test only covered RoleAssistant —
+// review finding.)
 func TestInlineConsecutiveRunStaysAligned(t *testing.T) {
 	p := New()
-	msg := render.Message{Role: render.RoleAssistant, Content: "aligned"}
-
-	labeled := p.Message(msg, render.RoleNone, 80)
-	continued := p.Message(msg, render.RoleAssistant, 80)
-
-	// The column is the RENDERED width up to the token, not a byte offset:
-	// the separator (·) is multi-byte, so strings.Index would overstate the
-	// column by counting its extra byte.
-	col := func(out string) int {
-		idx := strings.Index(stripANSI(out), "aligned")
-		if idx < 0 {
-			return -1
-		}
-		return lipgloss.Width(stripANSI(out)[:idx])
+	cases := []struct {
+		name  string
+		role  render.Role
+		token string
+	}{
+		{"user", render.RoleUser, "aligned"},
+		{"assistant", render.RoleAssistant, "aligned"},
 	}
-	if labeled == "" || continued == "" {
-		t.Fatalf("expected non-empty output, got %q and %q", labeled, continued)
-	}
-	if got, want := col(continued), col(labeled); got != want {
-		t.Errorf("consecutive message content starts at column %d, want %d (same as the labeled run start): %q vs %q", got, want, continued, labeled)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			msg := render.Message{Role: c.role, Content: c.token}
+
+			labeled := p.Message(msg, render.RoleNone, 80)
+			continued := p.Message(msg, c.role, 80)
+
+			// The column is the RENDERED width up to the token, not a byte
+			// offset: the separator (·) is multi-byte, so strings.Index would
+			// overstate the column by counting its extra byte.
+			col := func(out string) int {
+				idx := strings.Index(stripANSI(out), c.token)
+				if idx < 0 {
+					return -1
+				}
+				return lipgloss.Width(stripANSI(out)[:idx])
+			}
+			if labeled == "" || continued == "" {
+				t.Fatalf("expected non-empty output, got %q and %q", labeled, continued)
+			}
+			if got, want := col(continued), col(labeled); got != want {
+				t.Errorf("consecutive message content starts at column %d, want %d (same as the labeled run start): %q vs %q", got, want, continued, labeled)
+			}
+		})
 	}
 }
 
