@@ -147,14 +147,15 @@ type Model struct {
 	// ctrl+r — and, on a mouse-capable surface, by clicking the box itself
 	// (Phase 3 Task 16).
 	reasoningCollapsed bool
-	// reasoningResetPending marks that the next reasoningDeltaMsg must start a
-	// fresh trace instead of appending to m.reasoning. Set whenever a
-	// step-boundary reasoningMsg (Callbacks.OnReasoning, which fires with the
-	// COMPLETE block for the step that just ended) lands: that text is
-	// authoritative for the step that just finished, but the next step's
-	// streamed deltas are a new trace, not a continuation of it. Without this,
-	// the first delta of every step after the first would be appended onto
-	// the previous step's complete text and the box would duplicate it.
+	// reasoningResetPending marks that the next reasoningEventDelta must start
+	// a fresh trace instead of appending to m.reasoning. Set whenever a
+	// step-boundary reasoningEventBoundary (Callbacks.OnReasoning, which fires
+	// with the COMPLETE block for the step that just ended) is processed:
+	// that text is authoritative for the step that just finished, but the
+	// next step's streamed deltas are a new trace, not a continuation of it.
+	// Without this, the first delta of every step after the first would be
+	// appended onto the previous step's complete text and the box would
+	// duplicate it.
 	reasoningResetPending bool
 	// reasoningSpanStart/End record the content-relative row span [start, end)
 	// the reasoning box occupies in the viewport's virtualized scrollback for
@@ -279,18 +280,39 @@ type Model struct {
 
 	// Channels for async communication with callbacks
 	statusChan       chan string
-	reasoningChan    chan string
 	toolRequestChan  chan chat.ToolCallRequest
 	toolResponseChan chan chat.ToolCallResponse
 	toolResultChan   chan chat.ToolResult
-	// reasoningDeltaChan carries live token-level reasoning deltas from
-	// Callbacks.OnStream (see chat.StreamEvent's "reasoning" kind). Unlike
-	// statusChan/reasoningChan, sends here are blocking (never select+default):
-	// those channels carry step-boundary snapshots where dropping a stale one
-	// is harmless (only the latest matters), but a dropped delta here would
-	// leave a gap in the middle of the accumulated trace. The buffer just
-	// gives a fast token burst some slack before that backpressure kicks in.
-	reasoningDeltaChan chan string
+	// reasoningChan carries BOTH step-boundary reasoning (Callbacks.OnReasoning,
+	// the COMPLETE block for a step) and live streamed reasoning deltas
+	// (Callbacks.OnStream's "reasoning" kind), as a single ordered stream of
+	// reasoningEvent values distinguished by their kind field.
+	//
+	// This is deliberately ONE channel rather than two. cogito emits every
+	// delta for a step and only then fires the step-boundary callback, all on
+	// one goroutine — so the producer's own order is already correct. But
+	// bubbletea relays each tea.Cmd's result through its own independently
+	// scheduled goroutine (see tea.go's per-Cmd `go func(){ p.Send(cmd()) }`),
+	// so splitting boundary and delta onto separate channels/listeners lets
+	// Update observe them out of producer order: a buffered delta channel can
+	// have a send return (and its listener relay it) without a rendezvous,
+	// while a separate listener parked on the boundary channel since session
+	// start can relay near-instantly — so the boundary for a step can reach
+	// Update before that same step's final delta does, clobbering the
+	// authoritative text with a stale trailing fragment. A single channel
+	// with a single listener removes the second goroutine entirely: FIFO
+	// ordering on one channel preserves the producer's order by construction,
+	// with no sequence number or generation counter to keep in sync.
+	//
+	// Sends are blocking (never select+default): unlike statusChan (a plain
+	// status string where dropping a stale one is harmless — only the latest
+	// matters), losing either kind of reasoning event here is a real
+	// correctness bug: a dropped delta leaves a gap in the accumulated trace,
+	// and a dropped boundary means reasoningResetPending never gets armed, so
+	// the next step's deltas silently keep appending onto stale text forever.
+	// The buffer just gives a fast token burst some slack before backpressure
+	// kicks in.
+	reasoningChan chan reasoningEvent
 }
 
 // responseMsg is sent when the AI responds
@@ -326,14 +348,30 @@ type parkMsg parkEvent
 // statusMsg is sent for status updates
 type statusMsg string
 
-// reasoningMsg is sent for reasoning updates
-type reasoningMsg string
+// reasoningEventKind distinguishes the two kinds of reasoning update carried
+// on reasoningChan.
+type reasoningEventKind int
 
-// reasoningDeltaMsg carries one (possibly coalesced — see listenReasoningDelta)
-// chunk of a live streamed reasoning trace. It is distinct from reasoningMsg,
-// which carries the COMPLETE block at a step boundary: the two are handled
-// with different precedence in Update (see reasoningResetPending).
-type reasoningDeltaMsg string
+const (
+	// reasoningEventDelta is one (possibly coalesced) chunk of a live streamed
+	// reasoning trace (Callbacks.OnStream's "reasoning" kind).
+	reasoningEventDelta reasoningEventKind = iota
+	// reasoningEventBoundary carries the COMPLETE reasoning block for a step
+	// that just ended (Callbacks.OnReasoning).
+	reasoningEventBoundary
+)
+
+// reasoningEvent is one item read off reasoningChan. The two kinds are
+// handled with different precedence in Update — see reasoningResetPending.
+type reasoningEvent struct {
+	kind reasoningEventKind
+	text string
+}
+
+// reasoningEventsMsg carries one or more reasoningEvent values, in the exact
+// order the producer emitted them onto reasoningChan (see listenReasoningEvents
+// for why a batch and not always exactly one).
+type reasoningEventsMsg []reasoningEvent
 
 // toolCallMsg is sent when a tool call needs approval
 type toolCallMsg chat.ToolCallRequest
@@ -415,8 +453,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		height:             height,
 		agentEventChan:     make(chan chat.AgentEvent, 16),
 		statusChan:         make(chan string, 10),
-		reasoningChan:      make(chan string, 10),
-		reasoningDeltaChan: make(chan string, 256),
+		reasoningChan:      make(chan reasoningEvent, 256),
 		toolRequestChan:    make(chan chat.ToolCallRequest),
 		toolResponseChan:   make(chan chat.ToolCallResponse),
 		toolResultChan:     make(chan chat.ToolResult, 64),
@@ -471,11 +508,11 @@ func (m Model) initSession() tea.Cmd {
 				default:
 				}
 			},
+			// Blocking send (no select+default): see reasoningChan's doc for
+			// why dropping a boundary event is a real correctness bug here,
+			// not a harmless "only the latest matters" case.
 			OnReasoning: func(reasoning string) {
-				select {
-				case m.reasoningChan <- reasoning:
-				default:
-				}
+				m.reasoningChan <- reasoningEvent{kind: reasoningEventBoundary, text: reasoning}
 			},
 			// OnStream opts the session into cogito's streaming path so the
 			// thinking box fills token-by-token instead of only at step
@@ -492,14 +529,16 @@ func (m Model) initSession() tea.Cmd {
 			// one. The rest (tool_call/tool_result/status/done/error/
 			// sub_agent) have no bearing on the reasoning box.
 			//
-			// The send is blocking (no select+default): see
-			// reasoningDeltaChan's doc for why a dropped delta is worse here
-			// than in the snapshot-style channels above.
+			// Sent onto the SAME reasoningChan as OnReasoning above (not a
+			// separate channel) — see reasoningChan's doc for why: cogito
+			// emits every delta for a step and only then fires the boundary,
+			// both from one goroutine, so one channel is what makes Update
+			// observe them in that same order.
 			OnStream: func(ev chat.StreamEvent) {
 				if ev.Kind != "reasoning" {
 					return
 				}
-				m.reasoningDeltaChan <- ev.Content
+				m.reasoningChan <- reasoningEvent{kind: reasoningEventDelta, text: ev.Content}
 			},
 			OnToolCall: func(req chat.ToolCallRequest) chat.ToolCallResponse {
 				// Send tool request and wait for user response
@@ -1018,7 +1057,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf("Reloaded %d durable loop(s).", n)})
 		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenReasoningDelta(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenPark(), m.listenCompact(), m.listenPrune())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoningEvents(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenPark(), m.listenCompact(), m.listenPrune())
 
 	case responseMsg:
 		// The run returned: it is no longer parked (all background work drained).
@@ -1249,26 +1288,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Continue listening for more status updates
 		cmds = append(cmds, m.listenStatus())
 
-	case reasoningMsg:
-		m.reasoning = string(msg)
-		// This step just ended: its complete text is authoritative, but the
-		// NEXT step's streamed deltas are a fresh trace, not a continuation of
-		// this one. Mark the next reasoningDeltaMsg to start over rather than
-		// append (see reasoningResetPending's doc).
-		m.reasoningResetPending = true
-		m.updateViewport()
-		// Continue listening for more reasoning updates
-		cmds = append(cmds, m.listenReasoning())
-
-	case reasoningDeltaMsg:
-		if m.reasoningResetPending {
-			m.reasoning = ""
-			m.reasoningResetPending = false
+	case reasoningEventsMsg:
+		// Applied in order — the exact order they were read off reasoningChan,
+		// which is itself the exact order the producer emitted them in (see
+		// reasoningChan's doc). One updateViewport for the whole batch, not
+		// one per event: that's the render-cost coalescing: see
+		// listenReasoningEvents.
+		for _, ev := range msg {
+			switch ev.kind {
+			case reasoningEventBoundary:
+				m.reasoning = ev.text
+				// This step just ended: its complete text is authoritative,
+				// but the NEXT step's streamed deltas are a fresh trace, not
+				// a continuation of this one. Mark the next delta to start
+				// over rather than append (see reasoningResetPending's doc).
+				m.reasoningResetPending = true
+			case reasoningEventDelta:
+				if m.reasoningResetPending {
+					m.reasoning = ""
+					m.reasoningResetPending = false
+				}
+				m.reasoning += ev.text
+			}
 		}
-		m.reasoning += string(msg)
 		m.updateViewport()
-		// Continue listening for more streamed deltas
-		cmds = append(cmds, m.listenReasoningDelta())
+		// Continue listening for more reasoning events
+		cmds = append(cmds, m.listenReasoningEvents())
 
 	case toolCallMsg:
 		m.pendingTool = (*chat.ToolCallRequest)(&msg)
@@ -1660,52 +1705,47 @@ func (m Model) listenStatus() tea.Cmd {
 	}
 }
 
-// listenReasoning listens for reasoning updates from the session
-func (m Model) listenReasoning() tea.Cmd {
-	return func() tea.Msg {
-		select {
-		case reasoning := <-m.reasoningChan:
-			return reasoningMsg(reasoning)
-		case <-m.ctx.Done():
-			return nil
-		}
-	}
-}
-
-// listenReasoningDelta listens for live streamed reasoning tokens
-// (Callbacks.OnStream) and re-arms itself after every delivery, same as
-// listenReasoning — a listener that does not re-arm delivers exactly one
-// delta and then goes silent.
+// listenReasoningEvents listens for reasoning updates — both step-boundary
+// (Callbacks.OnReasoning) and live streamed deltas (Callbacks.OnStream) — on
+// the single reasoningChan, and re-arms itself after every delivery: a
+// listener that does not re-arm delivers exactly one event/batch and then
+// goes silent.
+//
+// Ordering note: reasoningChan carries both kinds precisely so there is only
+// ONE listener goroutine for reasoning updates. Two separate channels (one
+// per kind, each with its own listener) would let bubbletea's independent
+// per-Cmd goroutines relay them to Update out of the producer's own order —
+// see reasoningChan's doc for the failure mode that caused. One channel, one
+// listener, means Update sees exactly the order they were sent in.
 //
 // Render-cost note: a token stream can deliver far faster than a terminal
 // should repaint (an updateViewport per token would be one render per
 // keystroke-equivalent). Rather than invent a timer, this drains whatever is
-// already queued on the channel — accumulated in order — into a single
-// reasoningDeltaMsg before returning. Because bubbletea does not call this
-// again until it has processed the previous message (and re-armed via the
-// cmds append below), the render rate is naturally bounded by how fast Update
-// can process a frame, not by the token rate: a burst that arrives while one
-// frame is still rendering collapses into the next frame instead of queuing
-// one render per token. The final drain is unconditional (it runs once at
-// least, then loops only while more is already buffered), so the last delta
-// of a turn is always included in the message it returns, never left for a
-// call that never comes.
-func (m Model) listenReasoningDelta() tea.Cmd {
+// already queued on the channel — accumulated in order, boundary and delta
+// events alike — into a single reasoningEventsMsg before returning. Because
+// bubbletea does not call this again until it has processed the previous
+// message (and re-armed via the cmds append below), the render rate is
+// naturally bounded by how fast Update can process a frame, not by the token
+// rate: a burst that arrives while one frame is still rendering collapses
+// into the next frame instead of queuing one render per token. The final
+// drain is unconditional (it runs once at least, then loops only while more
+// is already buffered), so the last event of a turn is always included in
+// the message it returns, never left for a call that never comes.
+func (m Model) listenReasoningEvents() tea.Cmd {
 	return func() tea.Msg {
 		select {
-		case first := <-m.reasoningDeltaChan:
-			var b strings.Builder
-			b.WriteString(first)
+		case first := <-m.reasoningChan:
+			events := []reasoningEvent{first}
 		drain:
 			for {
 				select {
-				case more := <-m.reasoningDeltaChan:
-					b.WriteString(more)
+				case more := <-m.reasoningChan:
+					events = append(events, more)
 				default:
 					break drain
 				}
 			}
-			return reasoningDeltaMsg(b.String())
+			return reasoningEventsMsg(events)
 		case <-m.ctx.Done():
 			return nil
 		}
