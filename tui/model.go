@@ -1701,14 +1701,59 @@ func (m Model) effectiveHeight() int {
 	return m.height
 }
 
+// renderComposer builds the composer block: the `/` completion popup, the
+// pending-message queue, and the input line (or the not-ready notice, or
+// nothing at all in the modes where the viewport's own dialog block carries
+// the choice row). Shared by View (which places the string via Frame) and
+// applyDimensions (which must measure it before the viewport's own height can
+// be budgeted) — the single call site Task 10a's Frame composition point
+// made possible, so the two can no longer drift the way a guessed constant
+// invited.
+func (m Model) renderComposer(w int) string {
+	var composer strings.Builder
+	if comp := renderCompletion(m.completion, strings.TrimSpace(m.textarea.Value()), w); comp != "" {
+		composer.WriteString(comp)
+		composer.WriteString("\n")
+	}
+	// Selection only matters when the composer is empty (that's when up/down
+	// navigate the queue).
+	if q := renderQueue(m.queue, m.queueSel, w); q != "" {
+		composer.WriteString(q)
+		composer.WriteString("\n")
+	}
+	switch {
+	case !m.sessionReady:
+		composer.WriteString(theme.Help.Render(theme.Starting))
+	case m.showLogs:
+		// no input: the log viewer owns the body and the keystrokes
+	case m.awaitingApproval && !m.approvalEditing:
+		// no input: choice row lives in the viewport approval block
+	default:
+		composer.WriteString(m.textarea.View())
+	}
+	return composer.String()
+}
+
 // applyDimensions sizes the components for a footer of footerHeight rows and
 // records what it budgeted for, so syncLayout can tell when that answer goes
 // stale.
 func (m *Model) applyDimensions(footerHeight int) {
-	headerHeight := 2 // brand/cwd line + hairline
-	// The composer block between the body and the footer: the blank line after
-	// the body, the single-line input, and the blank line before the footer.
-	composerHeight := 3
+	// headerHeight is still a guess (brand/cwd line + hairline): there is no
+	// HeaderHeight query on Presenter the way there is a FooterHeight, so a
+	// future bordered full-screen header (a box rather than a plain two-row
+	// top) would mis-budget here exactly as composerHeight used to. Left
+	// hardcoded rather than guessed-and-fixed like composerHeight below,
+	// since fixing it properly needs that new Presenter method — a signature
+	// change out of this task's scope — not a local computation.
+	headerHeight := 2
+	// The composer block between the body and the footer: a blank line after
+	// the body, the composer's own rendered height (renderComposer — usually
+	// one line, but a visible `/` completion popup or queued-message block can
+	// be taller), and a blank line before the footer. Measuring the real
+	// string instead of guessing "3" is what Task 10a's single composer
+	// call site made cheap: before it, the composer was built across four
+	// scattered call sites in View with nothing here to measure.
+	composerHeight := 2 + lipgloss.Height(m.renderComposer(m.width))
 
 	vpHeight := m.effectiveHeight() - headerHeight - composerHeight - footerHeight
 	if vpHeight < 5 {
@@ -2231,27 +2276,7 @@ func (m Model) View() string {
 	// frame — the `/` completion popup, the pending-message queue, and the
 	// input line (or the not-ready notice, or nothing at all in the modes
 	// where the viewport's own approval block carries the choice row).
-	var composer strings.Builder
-	if comp := renderCompletion(m.completion, strings.TrimSpace(m.textarea.Value()), m.width); comp != "" {
-		composer.WriteString(comp)
-		composer.WriteString("\n")
-	}
-	// Selection only matters when the composer is empty (that's when up/down
-	// navigate the queue).
-	if q := renderQueue(m.queue, m.queueSel, m.width); q != "" {
-		composer.WriteString(q)
-		composer.WriteString("\n")
-	}
-	switch {
-	case !m.sessionReady:
-		composer.WriteString(theme.Help.Render(theme.Starting))
-	case m.showLogs:
-		// no input: the log viewer owns the body and the keystrokes
-	case m.awaitingApproval && !m.approvalEditing:
-		// no input: choice row lives in the viewport approval block
-	default:
-		composer.WriteString(m.textarea.View())
-	}
+	composer := m.renderComposer(m.width)
 
 	// Footer: new-output marker (scroll-position signal — content arrived below
 	// the fold while the user was reading history), help/badges line, error
@@ -2266,7 +2291,7 @@ func (m Model) View() string {
 	// composer and footer relative to one another. Inline (and full, for now)
 	// simply stack them in this same order; a surface that owns the whole
 	// screen can do more once there's a dialog worth overlaying (Task 11).
-	return presenter.Frame(vs, header, body, composer.String(), footer, m.width, m.effectiveHeight())
+	return presenter.Frame(vs, header, body, composer, footer, m.width, m.effectiveHeight())
 }
 
 // helpLine returns the context-appropriate help string.
