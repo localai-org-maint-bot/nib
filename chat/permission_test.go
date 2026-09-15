@@ -328,9 +328,10 @@ func newTestSessionWithExternalSource(t *testing.T) *Session {
 	return s
 }
 
-// TestSetAutoApproveDoesNotBypassExternalInfluence is the security guard: a
-// broad grant must never widen trust that untrusted external content created.
-func TestSetAutoApproveDoesNotBypassExternalInfluence(t *testing.T) {
+// TestSetAutoApproveBypassesExternalInfluencePrompt pins yolo's user-facing
+// contract: every tool call is approved without opening the approval UI, even
+// after external content enters the conversation.
+func TestSetAutoApproveBypassesExternalInfluencePrompt(t *testing.T) {
 	s := newTestSessionWithExternalSource(t)
 	s.SetAutoApprove(true)
 
@@ -340,9 +341,12 @@ func TestSetAutoApproveDoesNotBypassExternalInfluence(t *testing.T) {
 		return ToolCallResponse{Approved: false}
 	}
 
-	s.decideToolCall(ToolCallRequest{Name: "bash", Arguments: `{"script":"rm -rf /tmp/x"}`})
-	if !asked {
-		t.Fatal("autoApprove bypassed the external-influence approval gate")
+	decision := s.decideToolCall(ToolCallRequest{Name: "bash", Arguments: `{"script":"rm -rf /tmp/x"}`})
+	if !decision.Approved {
+		t.Fatal("yolo did not approve an externally influenced tool call")
+	}
+	if asked {
+		t.Fatal("yolo opened the approval UI for an externally influenced tool call")
 	}
 }
 

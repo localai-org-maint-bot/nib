@@ -457,8 +457,9 @@ func (s *Session) LoadSkill(name string) (string, error) {
 //
 // It does not touch allowedTools or allowedBashPrefixes: those are narrower
 // grants the user minted explicitly, and revoking them as a side effect of
-// flipping this switch would be a surprise. It also cannot bypass the
-// external-influence gate in decideToolCall, which runs first.
+// flipping this switch would be a surprise. While active, it bypasses the
+// external-influence approval prompt but still permits PreToolUse hooks to
+// enforce their policies.
 func (s *Session) SetAutoApprove(on bool) { s.autoApprove.Store(on) }
 
 // AutoApprove reports whether every tool call is currently auto-approved.
@@ -484,12 +485,13 @@ func (s *Session) emitSubAgentToolLine(approved bool, agentID, name, args string
 func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 	req.ExternalSources = s.activeExternalSourceIDs()
 	// Once external data has entered the conversation, consequential actions
-	// need a fresh human decision. This check intentionally precedes hooks and
-	// broad grants: neither can silently widen trust granted by external text.
+	// need a fresh human decision unless session-wide auto-approval is active.
+	// Turn-wide and narrower grants cannot silently widen trust granted by
+	// external text. PreToolUse hooks still run in yolo mode below.
 	externallyInfluenced := len(req.ExternalSources) > 0 &&
 		!IsReadOnly(req.Name, req.Arguments, s.readOnlyCommands)
-	if externallyInfluenced {
-		note := fmt.Sprintf("Security: this action follows %d untrusted external source(s); review it independently. Broad grants do not bypass this boundary.", len(req.ExternalSources))
+	if externallyInfluenced && !s.autoApprove.Load() {
+		note := fmt.Sprintf("Security: this action follows %d untrusted external source(s); review it independently. Turn-wide and narrower grants do not bypass this boundary.", len(req.ExternalSources))
 		if req.Reasoning != "" {
 			req.Reasoning = note + "\nModel rationale: " + req.Reasoning
 		} else {
