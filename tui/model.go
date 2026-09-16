@@ -34,6 +34,11 @@ type ChatMessage struct {
 	Name      string // tool name, for Role == "tool"
 	Arguments string // marshaled call args, for Role == "tool"
 	AgentID   string // issuing sub-agent, for Role == "tool" (empty = root agent)
+	// Transient marks a turn-level error line: it stays in the transcript so
+	// the failure is visible, but is dropped as soon as a reply arrives (a
+	// successful turn, or a parked reply) so a recovered run doesn't carry
+	// the old error for the rest of the session.
+	Transient bool
 }
 
 // Model represents the TUI state
@@ -94,9 +99,14 @@ type Model struct {
 	loopsPath string // .nib/loops.json for durable jobs
 	status    string
 	reasoning string
-	err       error
-	output    string // Command to output to shell on exit
-	quitting  bool
+	// err holds the most recent fatal error, shown as a persistent banner
+	// above the composer. It is set only for errors that leave the session
+	// unusable (session init failure) — a failed turn already records its
+	// error in the transcript, and the banner would otherwise stay on screen
+	// for the rest of the session even after the run recovers.
+	err      error
+	output   string // Command to output to shell on exit
+	quitting bool
 
 	// Tool approval state
 	pendingTool      *chat.ToolCallRequest
@@ -731,19 +741,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			m.pending = nil
 		}
-		if msg.err != nil {
-			if errors.Is(msg.err, context.Canceled) {
-				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "interrupted."})
-			} else {
-				m.err = msg.err
-				m.messages = append(m.messages, ChatMessage{Role: "error", Content: msg.err.Error()})
+		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
+			// Record the failure in the transcript (not the persistent
+			// banner) and mark it transient: it stays visible until the
+			// next reply, so a recovered run doesn't carry the stale
+			// error for the rest of the session.
+			m.messages = append(m.messages, ChatMessage{Role: "error", Content: msg.err.Error(), Transient: true})
+		} else if content := strings.TrimSpace(msg.content); content != "" {
+			// A reply arrived (even one that duplicates the text already
+			// surfaced at the park gate): the run recovered, so drop any
+			// stale turn-level error lines before the new reply lands.
+			m.dropTransientErrors()
+			if content != m.lastParkedReply {
+				// Skip the final reply when it duplicates the text already
+				// surfaced at the park gate (a run that parked and returned
+				// with the same answer).
+				m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: msg.content})
 			}
-		} else if content := strings.TrimSpace(msg.content); content != "" && content != m.lastParkedReply {
-			// Skip the final reply when it duplicates the text already surfaced at
-			// the park gate (a run that parked and returned with the same answer).
-			m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: msg.content})
+		} else if errors.Is(msg.err, context.Canceled) {
+			// The run was interrupted: drop any stale turn-level error
+			// lines. An empty final message is not a reply, so without a
+			// cancel the stale error stays visible.
+			m.dropTransientErrors()
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "interrupted."})
 		}
-		m.lastParkedReply = ""
 		if m.session != nil {
 			m.contextTokens = m.session.ContextTokens()
 			m.sessionUsage = m.session.Usage()
@@ -1597,6 +1618,20 @@ func (m *Model) sameAgentMsg(idx int, agentID string) bool {
 	return x.Role == "agent" || x.Role == "agent_tool" || x.Role == "agent_result"
 }
 
+// dropTransientErrors removes stale turn-level error lines from the
+// transcript. Called when a reply arrives: the run recovered, so a failure
+// recorded earlier in the session should not keep showing.
+func (m *Model) dropTransientErrors() {
+	kept := m.messages[:0]
+	for _, msg := range m.messages {
+		if msg.Role == "error" && msg.Transient {
+			continue
+		}
+		kept = append(kept, msg)
+	}
+	m.messages = kept
+}
+
 func (m *Model) updateViewport() {
 	var sb strings.Builder
 
@@ -1891,6 +1926,10 @@ func (m Model) View() string {
 	}
 
 	if m.err != nil {
+		// Fatal, session-level error (e.g. session init failed): pin a banner
+		// above the composer. Turn-level errors never land here — they stay in
+		// the transcript where they belong, so a recovered run doesn't keep
+		// showing the old failure.
 		sb.WriteString("\n" + theme.Error.Render(theme.Cross+" "+m.err.Error()))
 	}
 
