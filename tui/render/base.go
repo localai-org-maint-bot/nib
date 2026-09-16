@@ -254,6 +254,29 @@ func (Base) Dialog(d Dialog, w int) string {
 			b.WriteString(gutter + optionStyle(opt).Render(opt.Text) + "\n")
 		}
 		return b.String()
+
+	case DialogModelPicker:
+		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
+		var b strings.Builder
+		b.WriteString(gutter + theme.LabelNib.Render(d.Title))
+		b.WriteString("\n")
+		for i, opt := range d.Options {
+			cursor := "  "
+			style := theme.Help
+			if i == d.Selected {
+				cursor = theme.Cursor + " "
+				style = theme.ApproveKey
+			}
+			b.WriteString(gutter + cursor + style.Render(opt.Text))
+			b.WriteString("\n")
+		}
+		if d.Hint != "" {
+			wrapped := Wrap(d.Hint, w-4)
+			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
+				b.WriteString(gutter + theme.Hint.Render(line) + "\n")
+			}
+		}
+		return b.String()
 	}
 	return ""
 }
