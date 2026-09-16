@@ -373,6 +373,13 @@ type Model struct {
 	queue    []string
 	queueSel int
 
+	// Input history for ↑/↓ recall (shell-style). histPos == len(history) is
+	// the "draft" position — the text the user is currently typing, stashed in
+	// histDraft once navigation begins.
+	history   []string
+	histPos   int
+	histDraft string
+
 	// pending holds files staged via /attach, awaiting the next message. They
 	// combine with inline @path files (via attachstage.BuildSend) on send and
 	// clear only after a successful send (mirrors the CLI REPL).
@@ -1062,6 +1069,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.queueMoveSel(-1)
 				return m, nil
 			}
+			m.historyUp()
+			return m, nil
 
 		case tea.KeyDown:
 			if m.completion.active {
@@ -1072,6 +1081,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.queueMoveSel(1)
 				return m, nil
 			}
+			m.historyDown()
+			return m, nil
 
 		case tea.KeyEnter:
 			// Accept an open completion instead of submitting — unless the
@@ -1124,6 +1135,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.awaitingApproval {
 				return m.handleToolApproval(input)
 			}
+
+			// Record the input for ↑/↓ recall (shell-style history).
+			m.pushHistory(input)
 
 			// While a run is in flight (working or parked), the input does not start
 			// a new turn — it queues into the live run. Queued entries are editable
@@ -1800,6 +1814,56 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 			return m.sendMessage(action.Text)
 		}
 		return m.sendWithAttachmentsCmd(action.Text, files, overrides)
+	}
+}
+
+// pushHistory records a submitted input for ↑/↓ recall, skipping an exact
+// repeat of the most recent entry (shell-style). Navigation resets to the
+// draft position so the next ↑ recalls the newest entry.
+func (m *Model) pushHistory(s string) {
+	if s == "" {
+		return
+	}
+	if n := len(m.history); n > 0 && m.history[n-1] == s {
+		m.histPos = len(m.history)
+		m.histDraft = ""
+		return
+	}
+	m.history = append(m.history, s)
+	m.histPos = len(m.history)
+	m.histDraft = ""
+}
+
+// historyUp recalls the previous (older) submitted input into the composer.
+// The current draft is stashed on the first press so historyDown can restore it.
+func (m *Model) historyUp() {
+	n := len(m.history)
+	if n == 0 {
+		return
+	}
+	if m.histPos >= n {
+		m.histDraft = m.textarea.Value()
+		m.histPos = n - 1
+	} else if m.histPos > 0 {
+		m.histPos--
+	} else {
+		return
+	}
+	m.textarea.SetValue(m.history[m.histPos])
+}
+
+// historyDown recalls the next (newer) submitted input, restoring the stashed
+// draft once navigation runs past the newest entry.
+func (m *Model) historyDown() {
+	n := len(m.history)
+	if n == 0 || m.histPos >= n {
+		return
+	}
+	m.histPos++
+	if m.histPos >= n {
+		m.textarea.SetValue(m.histDraft)
+	} else {
+		m.textarea.SetValue(m.history[m.histPos])
 	}
 }
 
