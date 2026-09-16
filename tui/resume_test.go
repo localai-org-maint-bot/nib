@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,14 @@ import (
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/tui/render"
 )
+
+type failingDeleteStore struct {
+	*chat.SessionStore
+}
+
+func (s *failingDeleteStore) Delete(string) error {
+	return errors.New("boom")
+}
 
 func TestBuildResumeDialog(t *testing.T) {
 	list := &render.SelectList{Items: []string{"a · 1m ago · 2 messages", "b · 2h ago · 5 messages"}, Selected: 1}
@@ -76,6 +85,30 @@ func TestStartResumeOpensPickerCwdScoped(t *testing.T) {
 	}
 	if len(m.resumeSessions) != 1 || m.resumeSessions[0].ID != "here" {
 		t.Fatalf("resumeSessions = %+v, want just the cwd-scoped one", m.resumeSessions)
+	}
+}
+
+func TestStartResumeClearsDeleteArm(t *testing.T) {
+	dir := t.TempDir()
+	store := chat.NewSessionStore(dir)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustSaveTUI(t, store, chat.SessionRecord{ID: "here", Cwd: cwd, Title: "in this dir"})
+
+	m := newTestModel(Model{
+		store:             store,
+		textarea:          textarea.New(),
+		viewport:          viewport.New(80, 20),
+		resumeDeleteArmed: true,
+	})
+	m.startResume(false, "")
+	if !m.awaitingResume {
+		t.Fatal("expected awaitingResume after opening the picker")
+	}
+	if m.resumeDeleteArmed {
+		t.Fatal("startResume should clear a stale delete arm")
 	}
 }
 
@@ -490,6 +523,48 @@ func TestResumeDeleteSecondPressDeletesTheFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "beta.json")); err != nil {
 		t.Errorf("beta.json should survive, stat err = %v", err)
+	}
+}
+
+// TestResumeDeleteFailureLeavesPickerUnchanged proves the picker only updates
+// after the backing file delete succeeds; a filesystem failure must not make
+// the session disappear from the in-memory list while it still exists on disk.
+func TestResumeDeleteFailureLeavesPickerUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	backing := chat.NewSessionStore(dir)
+	mustSaveTUI(t, backing, chat.SessionRecord{ID: "alpha", Cwd: "/p"})
+	mustSaveTUI(t, backing, chat.SessionRecord{ID: "beta", Cwd: "/p"})
+	sessions := []chat.SessionRecord{{ID: "alpha"}, {ID: "beta"}}
+
+	m := newTestModel(Model{
+		store: &failingDeleteStore{SessionStore: backing}, textarea: textarea.New(), viewport: viewport.New(80, 20), width: 80,
+		awaitingResume: true, resumeSessions: sessions,
+		resumeList: &render.SelectList{Items: resumeItems(sessions)},
+		presenter:  testPresenter(),
+	})
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	nm := next.(Model)
+	next, cmd := nm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	nm = next.(Model)
+
+	if cmd != nil {
+		t.Error("deleting should not itself return a cmd")
+	}
+	if nm.resumeDeleteArmed {
+		t.Error("resumeDeleteArmed should be cleared once the delete attempt runs")
+	}
+	if len(nm.resumeSessions) != 2 || nm.resumeSessions[0].ID != "alpha" || nm.resumeSessions[1].ID != "beta" {
+		t.Fatalf("resumeSessions after failed delete = %+v, want alpha/beta unchanged", nm.resumeSessions)
+	}
+	if len(nm.resumeList.Items) != 2 {
+		t.Fatalf("resumeList.Items after failed delete = %+v, want 2 entries", nm.resumeList.Items)
+	}
+	if !nm.awaitingResume {
+		t.Error("the picker should stay open after a failed delete")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "alpha.json")); err != nil {
+		t.Errorf("alpha.json should still exist after failed delete, stat err = %v", err)
 	}
 }
 

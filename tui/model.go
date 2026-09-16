@@ -37,6 +37,18 @@ type ChatMessage struct {
 	Name      string // tool name, for Role == "tool"
 	Arguments string // marshaled call args, for Role == "tool"
 	AgentID   string // issuing sub-agent, for Role == "tool" (empty = root agent)
+	// Transient marks a turn-level error line: it stays in the transcript so
+	// the failure is visible, but is dropped as soon as a reply arrives (a
+	// successful turn, or a parked reply) so a recovered run doesn't carry
+	// the old error for the rest of the session.
+	Transient bool
+}
+
+type sessionStore interface {
+	Save(chat.SessionRecord) error
+	Load(string) (chat.SessionRecord, error)
+	List(string) ([]chat.SessionRecord, error)
+	Delete(string) error
 }
 
 // appendMessage appends one or more entries to the transcript. Beyond that it
@@ -263,9 +275,14 @@ type Model struct {
 	// Update, which compares a translated click row against this span.
 	reasoningSpanStart int
 	reasoningSpanEnd   int
-	err                error
-	output             string // Command to output to shell on exit
-	quitting           bool
+	// err holds the most recent fatal error, shown as a persistent banner
+	// above the composer. It is set only for errors that leave the session
+	// unusable (session init failure) — a failed turn already records its
+	// error in the transcript, and the banner would otherwise stay on screen
+	// for the rest of the session even after the run recovers.
+	err      error
+	output   string // Command to output to shell on exit
+	quitting bool
 
 	// Tool approval state
 	pendingTool      *chat.ToolCallRequest
@@ -323,7 +340,7 @@ type Model struct {
 	// resumed record) rather than recomputed, so a session's Created date
 	// survives across many autosaves. All three are seeded by NewModel and
 	// overwritten by a successful /resume (see applyResume).
-	store          *chat.SessionStore
+	store          sessionStore
 	sessionID      string
 	sessionTitle   string
 	sessionCreated time.Time
@@ -1220,10 +1237,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			if errors.Is(msg.err, context.Canceled) {
+				// The run was interrupted: drop any stale turn-level error
+				// lines. An empty final message is not a reply, so without a
+				// cancel the stale error stays visible.
+				m.dropTransientErrors()
 				m.appendMessage(ChatMessage{Role: "agent", Content: "interrupted."})
 			} else {
-				m.err = msg.err
-				m.appendMessage(ChatMessage{Role: "error", Content: msg.err.Error()})
+				// Record the failure in the transcript (not the persistent
+				// banner) and mark it transient: it stays visible until the
+				// next reply, so a recovered run doesn't carry the stale
+				// error for the rest of the session.
+				m.messages = append(m.messages, ChatMessage{Role: "error", Content: msg.err.Error(), Transient: true})
 			}
 		} else if content := strings.TrimSpace(msg.content); content != "" {
 			switch {
@@ -1239,6 +1263,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// answer, with nothing streamed since).
 				m.appendMessage(ChatMessage{Role: "assistant", Content: msg.content})
 			}
+			// A reply arrived (even one that duplicates the text already
+			// surfaced at the park gate): the run recovered, so drop any
+			// stale turn-level error lines after reconciling the final reply.
+			m.dropTransientErrors()
 		}
 		m.lastParkedReply = ""
 		if m.session != nil {
@@ -2362,6 +2390,20 @@ func (m *Model) sameAgentMsg(idx int, agentID string) bool {
 		return false
 	}
 	return x.Role == "agent" || x.Role == "agent_tool" || x.Role == "agent_result"
+}
+
+// dropTransientErrors removes stale turn-level error lines from the
+// transcript. Called when a reply arrives: the run recovered, so a failure
+// recorded earlier in the session should not keep showing.
+func (m *Model) dropTransientErrors() {
+	kept := m.messages[:0]
+	for _, msg := range m.messages {
+		if msg.Role == "error" && msg.Transient {
+			continue
+		}
+		kept = append(kept, msg)
+	}
+	m.messages = kept
 }
 
 // updateViewportFollow re-renders and pins the viewport to the bottom. Use it
