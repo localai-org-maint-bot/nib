@@ -1157,6 +1157,12 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	s.ensureSystemPrompt()
 
 	s.historyMu.Lock()
+	// Snapshot the history before committing the user message, so a failed or
+	// interrupted turn can be rolled back to the pre-turn state. Without this,
+	// the user's message is orphaned (committed with no assistant reply) and a
+	// retry double-adds it.
+	preTurnFragment := s.fragment
+	preTurnMessages := s.messages
 	s.fragment = buildUserFragment(s.fragment, text, parts)
 	s.messages = append(s.messages, openai.ChatCompletionMessage{
 		Role:    "user",
@@ -1314,12 +1320,24 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		s.goalDone = false
 		s.runMu.Unlock()
 
-		// ExecuteTools takes the fragment by value, so it operates on a copy;
-		// only the reassignment of the result needs the lock (below), not the
+		// ExecuteTools takes the fragment by value, so it operates on a copy
+		// of the Messages slice — but Fragment.Status is a *Status pointer,
+		// which is shared, not copied. Without the deep copy below, a failed
+		// or interrupted turn would leave s.fragment.Status polluted with
+		// PastActions, ToolsCalled, Iterations etc. from the failed run,
+		// causing false loop detection and incorrect ErrNoToolSelected
+		// behaviour on the next turn.
+		//
+		// Only the reassignment of the result needs the lock (below), not the
 		// whole call — holding it across the call would block ExportHistory for
 		// the entire turn.
+		runFragment := s.fragment
+		if runFragment.Status != nil {
+			statusCopy := *runFragment.Status
+			runFragment.Status = &statusCopy
+		}
 		var newFragment cogito.Fragment
-		newFragment, err = cogito.ExecuteTools(llm, s.fragment, cogitoOpts...)
+		newFragment, err = cogito.ExecuteTools(llm, runFragment, cogitoOpts...)
 		if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
 			// Interrupt (turnCtx cancelled) surfaces here as a context error;
 			// clear the goal so the user's stop sticks and it doesn't re-arm.
@@ -1417,6 +1435,15 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			if s.callbacks.OnError != nil {
 				s.callbacks.OnError(err)
 			}
+			// Roll back the user message: the turn failed (interrupt, error,
+			// or overflow that survived recovery), so restore the pre-turn
+			// history. The user's message is gone and a retry will not
+			// double-add it. Token usage is kept — the backend billed those
+			// tokens regardless.
+			s.historyMu.Lock()
+			s.fragment = preTurnFragment
+			s.messages = preTurnMessages
+			s.historyMu.Unlock()
 			return "", err
 		}
 
