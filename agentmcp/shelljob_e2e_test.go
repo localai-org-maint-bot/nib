@@ -25,6 +25,10 @@ func bgShellLLM(t *testing.T, script, parkReply, finalReply string) *httptest.Se
 	t.Helper()
 	var req int64
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		var body struct {
 			Stream bool `json:"stream"`
 		}

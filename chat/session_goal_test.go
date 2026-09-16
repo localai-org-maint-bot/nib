@@ -189,6 +189,11 @@ func TestGoalClearedOnInterrupt(t *testing.T) {
 	firstSeen := make(chan struct{}, 1)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip the context-size probe so it does not trigger firstSeen.
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		// Signal (non-blocking) the first time the server is hit.
 		select {
 		case firstSeen <- struct{}{}:

@@ -28,6 +28,10 @@ func fakeToolCallingLLM(t *testing.T, scripts ...string) *httptest.Server {
 	t.Helper()
 	var n int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		msg := map[string]any{"role": "assistant"}
 		finish := "stop"
 		if i := int(atomic.AddInt64(&n, 1)); i <= len(scripts) {

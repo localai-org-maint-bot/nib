@@ -70,6 +70,10 @@ func recordingLLM(t *testing.T) (*httptest.Server, func() string) {
 	var system string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		var req struct {
 			Messages []struct {

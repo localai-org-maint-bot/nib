@@ -25,6 +25,10 @@ func TestUndeliveredInjectHandedBack(t *testing.T) {
 	release := make(chan struct{})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		// Signal the test that the final LLM call is in flight, then hold the
 		// response until the test has injected mid-call.
 		select {

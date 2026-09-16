@@ -260,6 +260,16 @@ func (s *Session) ContextTokens() int {
 	return estimateTokens(s.fragment.Messages)
 }
 
+// MaxContextTokens returns the effective context window for the current model.
+// When the user explicitly configured max_context_tokens that value is returned
+// as-is; otherwise it reflects the auto-detected value (from the endpoint probe
+// or static table, falling back to the 128k default).
+func (s *Session) MaxContextTokens() int {
+	s.modelMu.RLock()
+	defer s.modelMu.RUnlock()
+	return s.compaction.MaxContextTokens
+}
+
 // formatTokenCount returns the bare magnitude string for a token count, e.g.
 // 950 → "950", 12000 → "12k", 47200 → "47.2k". A trailing ".0" is trimmed.
 // Returns "" for zero/negative so callers can omit the segment.

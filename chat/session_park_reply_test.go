@@ -29,6 +29,11 @@ func TestParkedReplySurfacedToOnParked(t *testing.T) {
 	var mainReq int64 // atomic; counts main-conversation requests
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip the context-size probe so it does not shift the request counter.
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		var req struct {
 			Stream   bool `json:"stream"`
 			Messages []struct {

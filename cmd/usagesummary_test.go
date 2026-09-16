@@ -33,6 +33,10 @@ func TestSessionSummaryIsNotShellShaped(t *testing.T) {
 func fakeUsageLLM(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id": "fake", "object": "chat.completion", "model": "fake",

@@ -156,6 +156,12 @@ type Session struct {
 	// carries its own lock rather than sharing historyMu.
 	usage sessionUsage
 
+	// compactionAutoDetected records whether MaxContextTokens was auto-detected
+	// (from the endpoint probe or static table) rather than explicitly set by
+	// the user. When true, SetModel re-runs detection for the new model; when
+	// false, the user's explicit value is preserved across model switches.
+	compactionAutoDetected bool
+
 	// prunedMu guards the tool-output pruning state below. The manipulator reads
 	// it from inside cogito's loop, and nothing here should assume which
 	// goroutine that is; Reload writes the policy from the turn goroutine.
@@ -448,6 +454,22 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		xlog.Warn("self-config: initial reload", "error", err)
 	}
 	s.hooks.Fire(ctx, hooks.EventSessionStart, "", map[string]any{"event": "SessionStart"})
+
+	// Auto-detect the context window when the user did not set one explicitly.
+	// A zero MaxContextTokens means "unset" (config.go no longer defaults it);
+	// the probe and static table fill it in, with the 128k constant as the
+	// final fallback. Best-effort: on failure the 128k default is applied.
+	if s.compaction.MaxContextTokens == 0 {
+		s.compactionAutoDetected = true
+		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+		if v := detectContextSize(probeCtx, s.baseURL, s.apiKey, mainProvider.Model); v > 0 {
+			s.compaction.MaxContextTokens = v
+		} else {
+			s.compaction.MaxContextTokens = defaultContextTokens
+		}
+		cancel()
+	}
+
 	return s, nil
 }
 
@@ -1919,6 +1941,18 @@ func (s *Session) SetModel(name string) {
 	// session cannot see, a switch is something we know about, and PrefixWarm
 	// prefers a redundant "preparing" label over a silent minute.
 	s.prefixWarm.Store(false)
+
+	// Re-detect the context window for the new model, but only when the
+	// current value was auto-detected. An explicit user override is preserved.
+	if s.compactionAutoDetected {
+		probeCtx, cancel := context.WithTimeout(s.ctx, probeTimeout)
+		if v := detectContextSize(probeCtx, provider.BaseURL, provider.APIKey, name); v > 0 {
+			s.modelMu.Lock()
+			s.compaction.MaxContextTokens = v
+			s.modelMu.Unlock()
+		}
+		cancel()
+	}
 }
 
 // ListModels returns the model IDs the configured endpoint advertises, so a UI

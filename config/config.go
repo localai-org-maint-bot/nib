@@ -373,9 +373,9 @@ func withDefaults(cfg types.Config) types.Config {
 	// users must explicitly enable it in config.
 
 	// Compaction defaults (auto-compaction is ON unless Disabled).
-	if cfg.Compaction.MaxContextTokens == 0 {
-		cfg.Compaction.MaxContextTokens = 128000
-	}
+	// MaxContextTokens is deliberately NOT defaulted here: 0 means "auto-detect"
+	// — NewSession probes the endpoint and falls back to a static model table
+	// and then the 128k constant. An explicit positive value is an override.
 	if cfg.Compaction.Threshold == 0 {
 		cfg.Compaction.Threshold = 0.8
 	}

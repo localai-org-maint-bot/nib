@@ -31,6 +31,12 @@ type pruneRecorder struct {
 }
 
 func (p *pruneRecorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The context-size probe sends a GET to /models/capabilities; skip it so
+	// it is not recorded as a decode error.
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
 	body, _ := io.ReadAll(r.Body)
 	var req openai.ChatCompletionRequest
 	err := json.Unmarshal(body, &req)
