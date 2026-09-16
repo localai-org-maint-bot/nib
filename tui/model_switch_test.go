@@ -11,6 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/tui/render"
+	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
 )
 
@@ -172,7 +174,7 @@ func TestModelPickerEscCancelsAndLateResponsesAreIgnored(t *testing.T) {
 func TestModelPickerKeysTakePriorityAndEditRuneSafely(t *testing.T) {
 	m := newModelSwitchTestModel(t, "café", "cafeteria", "tea")
 	m.modelPicker.open(1)
-	m.modelPicker.setModels([]string{"café", "cafeteria", "tea"}, "café", 4)
+	m.modelPicker.setModels([]string{"café", "cafeteria", "tea"}, "café")
 	m.awaitingApproval = true
 	m.queue = []string{"queued-a", "queued-b"}
 	m.queueSel = 1
@@ -246,8 +248,8 @@ func TestModelPickerNavigationAndEnterSwitch(t *testing.T) {
 func TestModelPickerEnterWithoutMatchIsNoOp(t *testing.T) {
 	m := newModelSwitchTestModel(t, "model-a", "model-b")
 	m.modelPicker.open(1)
-	m.modelPicker.setModels([]string{"model-a", "model-b"}, "model-a", 4)
-	m.modelPicker.appendQuery("missing", 4)
+	m.modelPicker.setModels([]string{"model-a", "model-b"}, "model-a")
+	m.modelPicker.appendQuery("missing")
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
@@ -256,15 +258,17 @@ func TestModelPickerEnterWithoutMatchIsNoOp(t *testing.T) {
 	}
 }
 
-func TestViewRendersPickerInPlaceOfComposer(t *testing.T) {
+func TestViewRendersPickerDialogNotComposer(t *testing.T) {
 	m := newModelSwitchTestModel(t, "model-a", "model-b")
 	m.width, m.height = 80, 12
 	m.textarea.SetValue("composer-secret")
 	m.modelPicker.open(1)
+	m.updateDimensions()
+	m.updateViewport()
 
 	view := m.View()
 	if !strings.Contains(view, "search:") || !strings.Contains(view, "loading models") {
-		t.Fatalf("view does not contain picker: %q", view)
+		t.Fatalf("view does not contain picker dialog: %q", view)
 	}
 	if strings.Contains(view, "composer-secret") {
 		t.Fatalf("view exposed the composer while picker active: %q", view)
@@ -276,12 +280,12 @@ func TestModelPickerResizeKeepsSelectionVisibleWithinFrame(t *testing.T) {
 	m := newModelSwitchTestModel(t, models...)
 	m.width, m.height, m.maxHeight = 80, 24, 12
 	m.modelPicker.open(1)
-	m.modelPicker.setModels(models, "model-19", 20)
+	m.modelPicker.setModels(models, "model-19")
 	m.updateDimensions()
 
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
 	m = next.(Model)
-	visible := m.modelPickerVisibleRowsForFrame()
+	visible := modelPickerMaxVisible
 	if m.modelPicker.selected < m.modelPicker.offset || m.modelPicker.selected >= m.modelPicker.offset+visible {
 		t.Fatalf("selected=%d offset=%d visible=%d: selection is outside the resized window", m.modelPicker.selected, m.modelPicker.offset, visible)
 	}
@@ -355,4 +359,66 @@ func TestDispatchModelSetRejectsAnUnknownName(t *testing.T) {
 	if got := m.session.Model(); got != "qwen3-coder-30b" {
 		t.Fatalf("session model = %q, want the switch refused", got)
 	}
+}
+
+func TestModelPickerDialogStates(t *testing.T) {
+	t.Run("loading", func(t *testing.T) {
+		m := newModelSwitchTestModel(t, "model-a")
+		m.modelPicker.open(1)
+		d := m.buildModelPickerDialog()
+		if d.Hint != theme.ModelPickerLoading {
+			t.Fatalf("hint = %q, want %q", d.Hint, theme.ModelPickerLoading)
+		}
+		if len(d.Options) != 0 {
+			t.Fatalf("loading dialog should have no options, got %d", len(d.Options))
+		}
+	})
+	t.Run("empty endpoint", func(t *testing.T) {
+		m := newModelSwitchTestModel(t, "model-a")
+		m.modelPicker.open(1)
+		m.modelPicker.setModels([]string{}, "model-a")
+		d := m.buildModelPickerDialog()
+		if d.Hint != theme.ModelPickerEmpty {
+			t.Fatalf("hint = %q, want %q", d.Hint, theme.ModelPickerEmpty)
+		}
+	})
+	t.Run("no search matches", func(t *testing.T) {
+		m := newModelSwitchTestModel(t, "model-a", "model-b")
+		m.modelPicker.open(1)
+		m.modelPicker.setModels([]string{"model-a", "model-b"}, "model-a")
+		m.modelPicker.appendQuery("xyz")
+		d := m.buildModelPickerDialog()
+		if d.Hint != theme.ModelPickerNoMatches {
+			t.Fatalf("hint = %q, want %q", d.Hint, theme.ModelPickerNoMatches)
+		}
+	})
+	t.Run("matches with current marker and key hint", func(t *testing.T) {
+		m := newModelSwitchTestModel(t, "model-a", "model-b", "model-c")
+		m.modelPicker.open(1)
+		m.modelPicker.setModels([]string{"model-a", "model-b", "model-c"}, "model-b")
+		d := m.buildModelPickerDialog()
+		if d.Kind != render.DialogModelPicker {
+			t.Fatalf("kind = %v, want DialogModelPicker", d.Kind)
+		}
+		if d.Hint != theme.ModelPickerKeyHint {
+			t.Fatalf("hint = %q, want %q", d.Hint, theme.ModelPickerKeyHint)
+		}
+		if !strings.Contains(d.Title, theme.ModelPickerSearchLabel) {
+			t.Fatalf("title = %q, want search label", d.Title)
+		}
+		// model-a is the session's current model, so it carries the marker.
+		found := false
+		for _, opt := range d.Options {
+			if strings.Contains(opt.Text, "model-a") && strings.Contains(opt.Text, "(current)") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("no option marks model-a as current: %+v", d.Options)
+		}
+		// setModels(..., "model-b") placed the cursor on model-b (index 1).
+		if d.Selected != 1 {
+			t.Fatalf("selected = %d, want 1 (model-b)", d.Selected)
+		}
+	})
 }

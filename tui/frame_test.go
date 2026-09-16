@@ -167,11 +167,11 @@ func TestFrameFitsTheTerminal(t *testing.T) {
 		}},
 		{"inline surface, model picker", inline.New(), func(m *Model) {
 			m.modelPicker.open(1)
-			m.modelPicker.setModels(modelPickerFrameItems(20), "model-19", 20)
+			m.modelPicker.setModels(modelPickerFrameItems(20), "model-19")
 		}},
 		{"full surface, model picker", full.New(), func(m *Model) {
 			m.modelPicker.open(1)
-			m.modelPicker.setModels(modelPickerFrameItems(20), "model-19", 20)
+			m.modelPicker.setModels(modelPickerFrameItems(20), "model-19")
 		}},
 	}
 	for _, tc := range cases {

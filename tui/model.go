@@ -869,16 +869,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The picker owns ordinary keys while open. Ctrl+C deliberately falls
 		// through to the application's existing interrupt-or-quit path.
 		if m.modelPicker.active && msg.Type != tea.KeyCtrlC {
-			visible := m.modelPickerVisibleRowsForFrame()
 			switch msg.Type {
 			case tea.KeyEsc:
 				m.modelPicker.close()
 			case tea.KeyUp:
-				m.modelPicker.move(-1, visible)
+				m.modelPicker.move(-1)
 			case tea.KeyDown:
-				m.modelPicker.move(1, visible)
+				m.modelPicker.move(1)
 			case tea.KeyBackspace:
-				m.modelPicker.backspace(visible)
+				m.modelPicker.backspace()
 			case tea.KeyEnter:
 				if choice, ok := m.modelPicker.choice(); ok {
 					m.session.SetModel(choice)
@@ -886,7 +885,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.modelPicker.close()
 				}
 			case tea.KeySpace:
-				m.modelPicker.appendQuery(" ", visible)
+				m.modelPicker.appendQuery(" ")
 			case tea.KeyRunes:
 				printable := make([]rune, 0, len(msg.Runes))
 				for _, r := range msg.Runes {
@@ -895,7 +894,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				if len(printable) > 0 {
-					m.modelPicker.appendQuery(string(printable), visible)
+					m.modelPicker.appendQuery(string(printable))
 				}
 			}
 			m.updateViewport()
@@ -1241,7 +1240,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		if m.modelPicker.active {
-			m.modelPicker.scrollSelectionIntoView(m.modelPickerVisibleRowsForFrame())
+			m.modelPicker.scrollSelectionIntoView(modelPickerMaxVisible)
 		}
 		m.updateDimensions()
 		// Content is wrapped to a width that no longer exists, and the offset was
@@ -1280,10 +1279,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modelPicker.close()
 			m.appendMessage(ChatMessage{Role: "error", Content: msg.err.Error()})
 		} else {
-			visible := m.modelPickerVisibleRowsForFrame()
-			m.modelPicker.setModels(msg.models, m.session.Model(), visible)
+			m.modelPicker.setModels(msg.models, m.session.Model())
 			if m.modelPicker.query != "" {
-				m.modelPicker.filter(visible)
+				m.modelPicker.filter()
 			}
 		}
 		m.updateViewport()
@@ -2357,21 +2355,6 @@ func (m Model) effectiveHeight() int {
 	return m.height
 }
 
-// modelPickerVisibleRowsForFrame returns how many model rows fit while the
-// frame keeps one body row and all presenter-owned chrome visible. The picker
-// itself adds a search row and a key-hint row around these results.
-func (m Model) modelPickerVisibleRowsForFrame() int {
-	vs := m.viewState()
-	fixed := m.presenter.HeaderHeight(vs) + m.dialogsHeight(vs) + m.footerHeight(vs)
-	fixed += 2 // separators around the composer
-	fixed += 2 // picker search and key-hint rows
-	fixed++    // minimum conversation body row while the picker is open
-	if rows := m.effectiveHeight() - fixed; rows > 1 {
-		return rows
-	}
-	return 1
-}
-
 // renderComposer builds the composer block: the `/` completion popup, the
 // pending-message queue, and the input line (or the not-ready notice, or
 // nothing at all in the modes where the viewport's own dialog block carries
@@ -2381,14 +2364,6 @@ func (m Model) modelPickerVisibleRowsForFrame() int {
 // made possible, so the two can no longer drift the way a guessed constant
 // invited.
 func (m Model) renderComposer(w int) string {
-	if m.modelPicker.active {
-		current := ""
-		if m.session != nil {
-			current = m.session.Model()
-		}
-		return renderModelPicker(m.modelPicker, current, w, m.modelPickerVisibleRowsForFrame()+3)
-	}
-
 	var composer strings.Builder
 	if comp := renderCompletion(m.completion, strings.TrimSpace(m.textarea.Value()), w); comp != "" {
 		composer.WriteString(comp)
@@ -2410,6 +2385,8 @@ func (m Model) renderComposer(w int) string {
 	case m.awaitingResume:
 		// no input: unlike ask_user, /resume has no free-text fallback — the
 		// picker lives in the viewport dialog block and swallows every key.
+	case m.modelPicker.active:
+		// no input: the model picker dialog handles all keys.
 	default:
 		composer.WriteString(m.textarea.View())
 	}
@@ -2471,9 +2448,6 @@ func (m *Model) applyDimensions(vs render.ViewState, footerHeight int) {
 
 	vpHeight := m.effectiveHeight() - budget
 	minimumViewportHeight := 5
-	if m.modelPicker.active {
-		minimumViewportHeight = 1
-	}
 	if vpHeight < minimumViewportHeight {
 		vpHeight = minimumViewportHeight
 	}
@@ -2659,6 +2633,9 @@ func (m Model) currentDialogs() []render.Dialog {
 	}
 	if m.awaitingResume && m.resumeList != nil {
 		dialogs = append(dialogs, buildResumeDialog(m.resumeList, m.resumeDeleteArmed))
+	}
+	if m.modelPicker.active {
+		dialogs = append(dialogs, m.buildModelPickerDialog())
 	}
 	return dialogs
 }
@@ -3014,6 +2991,8 @@ func (m Model) helpLine() string {
 		// the footer keeps showing the key list unconditionally so the user
 		// never loses sight of which key cancels the arm.
 		return theme.HelpResume
+	case m.modelPicker.active:
+		return theme.ModelPickerKeyHint
 	case m.parked:
 		return "enter add a follow-up · ctrl+c interrupt · ctrl+o logs"
 	case strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0:

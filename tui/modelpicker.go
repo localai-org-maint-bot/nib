@@ -4,8 +4,13 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mudler/nib/tui/render"
 	"github.com/mudler/nib/theme"
 )
+
+// modelPickerMaxVisible is the most model rows the dialog shows at once.
+// The list scrolls within this window, biased to keep the selection visible.
+const modelPickerMaxVisible = 8
 
 type modelPicker struct {
 	active    bool
@@ -26,7 +31,7 @@ func (p *modelPicker) close() {
 	*p = modelPicker{}
 }
 
-func (p *modelPicker) setModels(models []string, current string, visible int) {
+func (p *modelPicker) setModels(models []string, current string) {
 	p.loading = false
 	p.all = append([]string(nil), models...)
 	p.matches = append([]string(nil), models...)
@@ -38,24 +43,24 @@ func (p *modelPicker) setModels(models []string, current string, visible int) {
 			break
 		}
 	}
-	p.scrollSelectionIntoView(visible)
+	p.scrollSelectionIntoView(modelPickerMaxVisible)
 }
 
-func (p *modelPicker) appendQuery(text string, visible int) {
+func (p *modelPicker) appendQuery(text string) {
 	p.query += text
-	p.filter(visible)
+	p.filter()
 }
 
-func (p *modelPicker) backspace(visible int) {
+func (p *modelPicker) backspace() {
 	runes := []rune(p.query)
 	if len(runes) == 0 {
 		return
 	}
 	p.query = string(runes[:len(runes)-1])
-	p.filter(visible)
+	p.filter()
 }
 
-func (p *modelPicker) filter(visible int) {
+func (p *modelPicker) filter() {
 	p.matches = p.matches[:0]
 	query := strings.ToLower(p.query)
 	for _, model := range p.all {
@@ -65,10 +70,10 @@ func (p *modelPicker) filter(visible int) {
 	}
 	p.selected = 0
 	p.offset = 0
-	p.scrollSelectionIntoView(visible)
+	p.scrollSelectionIntoView(modelPickerMaxVisible)
 }
 
-func (p *modelPicker) move(delta int, visible int) {
+func (p *modelPicker) move(delta int) {
 	if len(p.matches) == 0 {
 		p.selected = 0
 		p.offset = 0
@@ -81,7 +86,7 @@ func (p *modelPicker) move(delta int, visible int) {
 	if p.selected >= len(p.matches) {
 		p.selected = len(p.matches) - 1
 	}
-	p.scrollSelectionIntoView(visible)
+	p.scrollSelectionIntoView(modelPickerMaxVisible)
 }
 
 func (p *modelPicker) scrollSelectionIntoView(visible int) {
@@ -106,59 +111,69 @@ func (p modelPicker) choice() (string, bool) {
 	return p.matches[p.selected], true
 }
 
-func modelPickerVisibleRows(height int) int {
-	if rows := height - 3; rows > 1 {
-		return rows
+// window returns the [start, end) slice of matches currently visible in the
+// dialog, clamped to modelPickerMaxVisible and offset.
+func (p modelPicker) window() (start, end int) {
+	n := len(p.matches)
+	if n == 0 {
+		return 0, 0
 	}
-	return 1
+	start = p.offset
+	if start < 0 {
+		start = 0
+	}
+	if start >= n {
+		start = n - 1
+	}
+	end = start + modelPickerMaxVisible
+	if end > n {
+		end = n
+	}
+	return start, end
 }
 
-func renderModelPicker(p modelPicker, current string, width int, height int) string {
-	if !p.active {
-		return ""
+// buildModelPickerDialog produces the render.Dialog for the model picker,
+// mirroring buildResumeDialog: the search query is the Title, the visible
+// window of filtered matches are the Options, and the key hint (or a
+// loading/empty/no-match message) is the Hint.
+func (m Model) buildModelPickerDialog() render.Dialog {
+	p := m.modelPicker
+	current := ""
+	if m.session != nil {
+		current = m.session.Model()
 	}
 
-	var lines []string
 	search := theme.ModelPickerSearchLabel
 	if p.query != "" {
 		search += " " + p.query
 	}
-	lines = append(lines, theme.Prompt.Render(clipModelPickerLine(search, width)))
+
+	d := render.Dialog{
+		Kind:  render.DialogModelPicker,
+		Title: search,
+		Hint:  theme.ModelPickerKeyHint,
+	}
 
 	switch {
 	case p.loading:
-		lines = append(lines, theme.Meta.Render(clipModelPickerLine(theme.ModelPickerLoading, width)))
+		d.Hint = theme.ModelPickerLoading
 	case len(p.all) == 0:
-		lines = append(lines, theme.Meta.Render(clipModelPickerLine(theme.ModelPickerEmpty, width)))
+		d.Hint = theme.ModelPickerEmpty
 	case len(p.matches) == 0:
-		lines = append(lines, theme.Meta.Render(clipModelPickerLine(theme.ModelPickerNoMatches, width)))
+		d.Hint = theme.ModelPickerNoMatches
 	default:
-		visible := modelPickerVisibleRows(height)
-		start := p.offset
-		if start < 0 {
-			start = 0
-		}
-		if start >= len(p.matches) {
-			start = len(p.matches) - 1
-		}
-		end := min(start+visible, len(p.matches))
+		start, end := p.window()
 		for i := start; i < end; i++ {
-			prefix := "  "
-			style := theme.Help
-			if i == p.selected {
-				prefix = theme.PromptGlyph + " "
-				style = theme.Prompt
-			}
-			line := prefix + p.matches[i]
+			text := p.matches[i]
 			if p.matches[i] == current {
-				line += " (current)"
+				text += " (current)"
 			}
-			lines = append(lines, style.Render(clipModelPickerLine(line, width)))
+			d.Options = append(d.Options, render.DialogOption{Text: text})
 		}
+		d.Selected = p.selected - start
 	}
 
-	lines = append(lines, theme.Hint.Render(clipModelPickerLine(theme.ModelPickerKeyHint, width)))
-	return strings.Join(lines, "\n")
+	return d
 }
 
 func clipModelPickerLine(line string, width int) string {

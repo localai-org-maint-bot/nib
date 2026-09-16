@@ -56,6 +56,7 @@ const (
 	DialogApproval DialogKind = iota
 	DialogAsk
 	DialogResume
+	DialogModelPicker
 )
 
 // DialogOption is one line of a Dialog's choice menu. Emphasis marks it as an
