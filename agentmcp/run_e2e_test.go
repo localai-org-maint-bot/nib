@@ -23,6 +23,10 @@ import (
 func fakeLLM(t *testing.T, answer string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		var req struct {
 			Stream bool `json:"stream"`
 		}
@@ -81,6 +85,10 @@ func parkingLLM(t *testing.T, release <-chan struct{}, parkReply, finalReply str
 	t.Helper()
 	var mainReq int64
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		var req struct {
 			Stream   bool `json:"stream"`
 			Messages []struct {

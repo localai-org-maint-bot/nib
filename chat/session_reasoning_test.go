@@ -18,6 +18,10 @@ import (
 // and replies with a single stop message (streaming + non-streaming paths).
 func reasoningEffortCapturingOpenAI(record func(string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		var req struct {
 			Stream          bool   `json:"stream"`
 			ReasoningEffort string `json:"reasoning_effort"`
@@ -111,6 +115,10 @@ func TestSessionSendsConfiguredReasoningEffort(t *testing.T) {
 // (not go-openai's "reasoning_content") — the field name go-openai's SDK
 // silently drops, which is why OpenAIClient never surfaced model reasoning.
 func localAIReasoningField(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id": "fake", "object": "chat.completion", "model": "fake",

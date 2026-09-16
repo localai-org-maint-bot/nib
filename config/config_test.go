@@ -11,8 +11,8 @@ import (
 
 func TestWithDefaultsCompaction(t *testing.T) {
 	cfg := withDefaults(types.Config{})
-	if cfg.Compaction.MaxContextTokens != 128000 {
-		t.Fatalf("MaxContextTokens default = %d, want 128000", cfg.Compaction.MaxContextTokens)
+	if cfg.Compaction.MaxContextTokens != 0 {
+		t.Fatalf("MaxContextTokens default = %d, want 0 (auto-detect in NewSession)", cfg.Compaction.MaxContextTokens)
 	}
 	if cfg.Compaction.Threshold != 0.8 {
 		t.Fatalf("Threshold default = %v, want 0.8", cfg.Compaction.Threshold)
@@ -231,7 +231,7 @@ func TestPrecedenceDefaultsThenFileThenEnv(t *testing.T) {
 		t.Fatalf("LogLevel = %q, want debug (seeded)", cfg.LogLevel)
 	}
 	// Nested struct fields merge per leaf: the file set neither, so both seeds
-	// stand and beat withDefaults' built-in 10 / 128000.
+	// stand and beat withDefaults' built-in 10.
 	if cfg.AgentOptions.Iterations != 42 {
 		t.Fatalf("AgentOptions.Iterations = %d, want 42 (seeded)", cfg.AgentOptions.Iterations)
 	}

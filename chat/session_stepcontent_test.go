@@ -27,6 +27,11 @@ func TestStepContentReachesCallbackBeforeToolResult(t *testing.T) {
 
 	var reqN int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip the context-size probe so it does not shift the request counter.
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		msg := map[string]any{"role": "assistant"}
 		finish := "stop"
 		if atomic.AddInt64(&reqN, 1) == 1 {
