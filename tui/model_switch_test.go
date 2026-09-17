@@ -32,7 +32,11 @@ func newModelSwitchTestModel(t *testing.T, ids ...string) Model {
 	}))
 	t.Cleanup(srv.Close)
 
-	cfg := types.Config{Model: ids[0], BaseURL: srv.URL + "/v1"}
+	cfg := types.Config{
+		Model:    ids[0],
+		BaseURL:  srv.URL + "/v1",
+		Compaction: types.CompactionConfig{MaxContextTokens: 128000},
+	}
 	s, err := chat.NewSession(context.Background(), cfg, chat.Callbacks{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -208,7 +212,11 @@ func TestModelPickerNavigationAndEnterSwitch(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "model-a"}, {"id": "model-b"}}})
 	}))
 	t.Cleanup(srv.Close)
-	cfg := types.Config{Model: "model-a", BaseURL: srv.URL + "/v1"}
+	cfg := types.Config{
+		Model:    "model-a",
+		BaseURL:  srv.URL + "/v1",
+		Compaction: types.CompactionConfig{MaxContextTokens: 128000},
+	}
 	s, err := chat.NewSession(context.Background(), cfg, chat.Callbacks{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
