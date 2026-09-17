@@ -192,6 +192,43 @@ func TestFrameFitsTheTerminal(t *testing.T) {
 	}
 }
 
+// TestFrameFillsTerminalOnFullSurface is the underflow counterpart of
+// TestFrameFitsTheTerminal: a full-surface (alt-screen) presenter owns the
+// whole terminal, so the composed frame must fill every row, not just avoid
+// exceeding the height. The viewport self-pads to its allotted height, but the
+// first-run empty state and the log-viewer job list do not, so without
+// height-fill padding in View the footer floats above the bottom.
+func TestFrameFillsTerminalOnFullSurface(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(m *Model)
+	}{
+		{"empty state", func(m *Model) {}},
+		{"log viewer", func(m *Model) {
+			m.showLogs = true
+		}},
+		{"viewport filled", func(m *Model) {
+			for i := 0; i < 60; i++ {
+				m.appendMessage(ChatMessage{Role: "user", Content: "history line"})
+			}
+			m.updateViewport()
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := frameModel()
+			m.presenter = full.New()
+			tc.setup(&m)
+			m.updateDimensions()
+
+			got := lipgloss.Height(m.View())
+			if got != m.height {
+				t.Errorf("full-surface frame is %d rows, terminal is %d: footer does not snap to the bottom", got, m.height)
+			}
+		})
+	}
+}
+
 func modelPickerFrameItems(n int) []string {
 	items := make([]string, n)
 	for i := range items {

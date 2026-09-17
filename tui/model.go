@@ -2429,14 +2429,16 @@ func (m Model) dialogsHeight(vs render.ViewState) int {
 // appearing, an approval arriving, the `/` completion popup opening —
 // re-budgets rather than pushing the frame over the terminal's height.
 func (m Model) layoutBudget(vs render.ViewState, footerHeight int) int {
-	// The composer block between the body and the footer: a blank line after
-	// the body, the composer's own rendered height (renderComposer — usually
+	// The composer block: its own rendered height (renderComposer — usually
 	// one line, but a visible `/` completion popup or queued-message block can
-	// be taller), and a blank line before the footer. Measuring the real
-	// string instead of guessing "3" is what Task 10a's single composer
-	// call site made cheap: before it, the composer was built across four
-	// scattered call sites in View with nothing here to measure.
-	composerHeight := 2 + lipgloss.Height(m.renderComposer(m.width))
+	// be taller). Frame writes the composer between two '\n' separators, but
+	// those are line terminators, not blank lines: the body and the composer
+	// string do not end in '\n', so each '\n' only ends the preceding line and
+	// adds no row of its own. Counting them as two rows here (as this used to)
+	// shrank the viewport by two and left a two-row gap below the footer every
+	// frame. Measuring the real string instead of guessing is what Task 10a's
+	// single composer call site made cheap.
+	composerHeight := lipgloss.Height(m.renderComposer(m.width))
 	return m.presenter.HeaderHeight(vs) + m.dialogsHeight(vs) + composerHeight + footerHeight
 }
 
@@ -2969,7 +2971,26 @@ func (m Model) View() string {
 	// composer and footer relative to one another. Inline (and full, for now)
 	// simply stack them in this same order; a surface that owns the whole
 	// screen can do more once there's a dialog worth overlaying (Task 11).
-	return presenter.Frame(vs, header, body, composer, footer, m.width, m.effectiveHeight())
+	//
+	// Fitting the frame to the terminal is the core's job, not the presenter's
+	// (see TestFrameContainsEveryPiece): Frame stacks and never clamps. The
+	// viewport self-pads to its allotted height, so the common case already
+	// fills the screen. But the first-run empty state and the log-viewer job
+	// list do not self-pad, so on a surface that owns the whole terminal the
+	// frame comes up short and the footer floats above the bottom. Measuring
+	// the deficit and padding body with that many newlines fills it exactly:
+	// appending N newlines to body adds exactly N rows to the frame (the first
+	// newline either terminates body's last line or extends the separator's
+	// blank line, and each subsequent newline is one blank row — the two cases
+	// net out to N rows either way).
+	out := presenter.Frame(vs, header, body, composer, footer, m.width, m.effectiveHeight())
+	if presenter.Caps().AltScreen {
+		if deficit := m.effectiveHeight() - lipgloss.Height(out); deficit > 0 {
+			body += strings.Repeat("\n", deficit)
+			out = presenter.Frame(vs, header, body, composer, footer, m.width, m.effectiveHeight())
+		}
+	}
+	return out
 }
 
 // helpLine returns the context-appropriate help string.
