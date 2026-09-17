@@ -13,9 +13,6 @@ import (
 // Every gap found so far under-reports rather than invents spend, so a figure
 // here is a floor and never an overstatement. That direction is the contract;
 // the list below is what is known, not a proof that nothing else leaks:
-//   - Streaming. cogito reads streamed usage from StreamEvent.Usage on the done
-//     event and its bundled clients never populate it, so a session that sets
-//     Callbacks.OnStream counts zero. nib's CLI and TUI do not set it.
 //   - A failed sub-agent. cogito keeps a sub-agent's fragment only on success,
 //     so whatever a failure burned before dying has nowhere to be read from.
 //   - A resumed sub-agent. send_agent_message to an agent that already finished

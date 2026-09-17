@@ -15,7 +15,7 @@ require (
 	github.com/google/jsonschema-go v0.3.0
 	github.com/klippa-app/go-pdfium v1.12.2
 	github.com/modelcontextprotocol/go-sdk v1.0.0
-	github.com/mudler/cogito v0.11.1-0.20260721122412-6eece18a6bb6
+	github.com/mudler/cogito v0.11.1-0.20260917210357-ecfa9bd71211
 	github.com/mudler/xlog v0.0.1
 	github.com/muesli/termenv v0.16.0
 	github.com/sashabaranov/go-openai v1.41.2
