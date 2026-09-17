@@ -98,10 +98,12 @@ type Session struct {
 	// sub-agents). May be nil (e.g. headless CLI without a job registry).
 	shellJobs *wizmcp.ShellJobs
 
-	agentManager *cogito.AgentManager
-	agentDefs    []cogito.AgentDefinition
-	agentModels  map[string]bool // models configured per agent type (for the LLM-model guard)
-	agentLogs    *agentLogStore  // per-sub-agent activity log (for the agent_logs tool)
+	agentManager   *cogito.AgentManager
+	agentDefs      []cogito.AgentDefinition
+	agentModels         map[string]bool // models configured per agent type (for the LLM-model guard)
+	endpointModels      []string        // models the endpoint advertises (lazy-fetched on first spawn_agent)
+	endpointModelsOnce  sync.Once       // guards the one-time lazy fetch in allowedAgentModels
+	agentLogs           *agentLogStore   // per-sub-agent activity log (for the agent_logs tool)
 
 	// modelMu guards the (llm, llmModel) pair, which SetModel replaces together
 	// when the user switches model mid-session. Not turnMu: that one is held
@@ -225,25 +227,55 @@ func (s *Session) AgentLog(agentID string) string {
 }
 
 // resolveAgentModel picks the model for a sub-agent: the requested model when
-// wiz actually serves it (the main model, or one configured for an agent type),
-// otherwise the main model. This honors per-agent model overrides from config
-// while ignoring model names the LLM invents via the spawn_agent `model` arg.
-func resolveAgentModel(requested, main string, configured map[string]bool) string {
-	if requested != "" && (requested == main || configured[requested]) {
+// wiz actually serves it (the main model, one configured for an agent type, or
+// one advertised by the endpoint's model list), otherwise the main model. This
+// honors per-agent model overrides from config and endpoint-served models while
+// ignoring model names the LLM invents via the spawn_agent `model` arg.
+func resolveAgentModel(requested, main string, allowed map[string]bool) string {
+	if requested != "" && (requested == main || allowed[requested]) {
 		return requested
 	}
 	return main
+}
+
+// allowedAgentModels returns the set of models a sub-agent may use: those
+// configured per agent type (config `agents:`) plus those the endpoint
+// advertises via /v1/models. The main model is always implicitly allowed
+// (checked separately in resolveAgentModel).
+//
+// The endpoint model list is fetched lazily on the first call (i.e. the first
+// spawn_agent), not during NewSession, so session init never makes an HTTP
+// call. On a successful fetch the session is marked for reload so the next
+// turn's system prompt carries the guidance listing. Tests that pre-set
+// endpointModels bypass the fetch.
+func (s *Session) allowedAgentModels() map[string]bool {
+	s.endpointModelsOnce.Do(func() {
+		if s.endpointModels == nil && s.baseURL != "" {
+			s.fetchEndpointModels(context.Background())
+			if len(s.endpointModels) > 0 {
+				s.requestReload()
+			}
+		}
+	})
+	allowed := make(map[string]bool, len(s.agentModels)+len(s.endpointModels))
+	for m := range s.agentModels {
+		allowed[m] = true
+	}
+	for _, m := range s.endpointModels {
+		allowed[m] = true
+	}
+	return allowed
 }
 
 // newAgentLLM builds the LLM client for a spawned sub-agent. mainModel is the
 // session model this turn runs against; requested is what the spawn_agent tool
 // asked for, which the LLM may fill with a name the endpoint doesn't serve
 // (e.g. "sonar") and 404 the sub-agent. Honor a requested model only when wiz
-// actually serves it (the main model, or one configured for an agent type),
-// otherwise fall back to the main model. This keeps per-agent model overrides
-// from config working while ignoring invented names.
+// actually serves it (the main model, a configured agent-type model, or one
+// advertised by the endpoint), otherwise fall back to the main model. This keeps
+// per-agent model overrides from config working while ignoring invented names.
 func (s *Session) newAgentLLM(mainModel, requested string, temperature float32, metadata map[string]string) cogito.LLM {
-	chosen := resolveAgentModel(requested, mainModel, s.agentModels)
+	chosen := resolveAgentModel(requested, mainModel, s.allowedAgentModels())
 	if requested != "" && chosen != requested {
 		xlog.Warn("sub-agent requested an unserved model; using the main model",
 			"requested", requested, "model", chosen)
@@ -1749,7 +1781,7 @@ func (s *Session) Reload(cfg types.Config) error {
 	s.agentModels = agentModelSet(s.agentDefs)
 	s.hooks = hooks.New(cfg.Hooks)
 	if cfg.Prompt != "" {
-		s.systemPrompt = cfg.GetPrompt() + s.loadedSkills
+		s.systemPrompt = cfg.GetPrompt() + s.loadedSkills + s.agentModelGuidance()
 	}
 	s.compaction = cfg.Compaction
 	// Guarded, unlike its neighbours: the manipulator reads the policy from
@@ -1978,6 +2010,60 @@ func (s *Session) ListModels(ctx context.Context) ([]string, error) {
 		}
 	}
 	return models, nil
+}
+
+// fetchEndpointModels populates s.endpointModels with the model IDs the
+// endpoint advertises. Called lazily by allowedAgentModels on the first
+// spawn_agent (not during NewSession, so session init makes no HTTP call).
+// Best-effort: on failure (endpoint unreachable, Codex without a configured
+// model, timeout) endpointModels stays nil and sub-agent model resolution
+// falls back to config-configured models only.
+func (s *Session) fetchEndpointModels(ctx context.Context) {
+	listCtx, cancel := context.WithTimeout(ctx, ModelListTimeout)
+	defer cancel()
+	models, err := s.ListModels(listCtx)
+	if err != nil {
+		return
+	}
+	s.endpointModels = models
+}
+
+// agentModelGuidance returns a system-prompt suffix that advertises the
+// endpoint-served models available for the spawn_agent `model` argument, so the
+// LLM picks real names instead of inventing ones. Returns "" when there is
+// nothing to say: spawn_agent disabled, no endpoint models, or the only model
+// served is the main model (nothing to choose from).
+//
+// The listing is capped so an endpoint that serves hundreds of models (e.g.
+// OpenRouter) does not bloat the system prompt. A user who needs a model beyond
+// the cap can configure it as an agent type.
+func (s *Session) agentModelGuidance() string {
+	if !s.toolEnabled("spawn_agent") || len(s.endpointModels) == 0 {
+		return ""
+	}
+	main := s.Model()
+	var others []string
+	for _, m := range s.endpointModels {
+		if m != main {
+			others = append(others, m)
+		}
+	}
+	if len(others) == 0 {
+		return ""
+	}
+	const cap = 30
+	shown := others
+	truncated := false
+	if len(shown) > cap {
+		shown = shown[:cap]
+		truncated = true
+	}
+	b := "\n\nModels available for the spawn_agent `model` argument (omit it to use the current model " + main + "): " + strings.Join(shown, ", ")
+	if truncated {
+		b += fmt.Sprintf(", and %d more (use /models to see the full list)", len(others)-cap)
+	}
+	b += "."
+	return b
 }
 
 // ModelListTimeout bounds the endpoint lookup behind /model and /models. Both
