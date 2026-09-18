@@ -112,8 +112,8 @@ func (j *bgJob) toOutput(script string) executeCommandOutput {
 	_, code, errMsg := j.snapshot()
 	return executeCommandOutput{
 		Script:   script,
-		Stdout:   j.stdout.String(),
-		Stderr:   j.stderr.String(),
+		Stdout:   compressOutput(j.stdout.String()),
+		Stderr:   compressOutput(j.stderr.String()),
 		ExitCode: code,
 		Success:  code == 0 && errMsg == "",
 		Error:    errMsg,
@@ -527,8 +527,8 @@ func registerBackgroundShellTools(srvCtx context.Context, server *mcp.Server, mg
 			Status:   j.status(),
 			Done:     done,
 			ExitCode: code,
-			Stdout:   j.stdout.String(),
-			Stderr:   j.stderr.String(),
+			Stdout:   compressOutput(j.stdout.String()),
+			Stderr:   compressOutput(j.stderr.String()),
 			Error:    errMsg,
 		}, nil
 	})
