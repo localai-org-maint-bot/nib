@@ -142,13 +142,37 @@ func (s *Session) rememberWindow(window int, model string) {
 // llmModel; Reload does not.)
 func (s *Session) contextWindow() int {
 	s.modelMu.RLock()
-	learned, forModel, current := s.learnedWindow, s.learnedWindowModel, s.llmModel
-	s.modelMu.RUnlock()
+	defer s.modelMu.RUnlock()
+	return s.windowLocked()
+}
 
-	if learned > 0 && forModel == current {
-		return learned
+// windowLocked is contextWindow's body, for callers that already hold modelMu.
+//
+// The lock has to span the MaxContextTokens read as well as the learned pair:
+// SetModel writes that field under modelMu when it re-detects the window for a
+// new model, and it runs on whichever goroutine drives the UI while these
+// readers run on the turn goroutine. Reading it outside the lock was a data
+// race — benign in practice, since an int does not tear on the platforms nib
+// targets, but a race the detector flags and the memory model does not permit.
+func (s *Session) windowLocked() int {
+	if s.learnedWindow > 0 && s.learnedWindowModel == s.llmModel {
+		return s.learnedWindow
 	}
 	return s.compaction.MaxContextTokens
+}
+
+// shouldCompactNow reports whether the last request's prompt tokens crossed the
+// auto-compaction trigger.
+//
+// It exists so the policy and the window are read under ONE lock. Taking them
+// separately would let a model switch land between the two and pair a new
+// model's window with the previous policy — and it would leave the whole-struct
+// copy of s.compaction unguarded against SetModel's write.
+func (s *Session) shouldCompactNow(promptTokens int) bool {
+	s.modelMu.RLock()
+	cfg, window := s.compaction, s.windowLocked()
+	s.modelMu.RUnlock()
+	return shouldAutoCompact(cfg, window, promptTokens)
 }
 
 // ContextWindow reports the context window this session is actually budgeting
@@ -280,10 +304,14 @@ func (s *Session) ContextTokens() int {
 	return estimateTokens(s.fragment.Messages)
 }
 
-// MaxContextTokens returns the effective context window for the current model.
-// When the user explicitly configured max_context_tokens that value is returned
-// as-is; otherwise it reflects the auto-detected value (from the endpoint probe
-// or static table, falling back to the 128k default).
+// MaxContextTokens returns the CONFIGURED window: the user's explicit
+// max_context_tokens when they set one, otherwise the auto-detected value from
+// the endpoint probe or static table, falling back to the 128k default.
+//
+// It is not the window the session budgets against — use ContextWindow for
+// that. A window learned from a backend overflow error replaces this value for
+// the model it was learned on, so the two disagree exactly when the configured
+// number was wrong about the model, which is the case worth knowing about.
 func (s *Session) MaxContextTokens() int {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()
@@ -406,7 +434,7 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 	// The memory tool reference nudges the model to persist durable facts
 	// (paths, decisions, gotchas) that the lossy summary may not preserve.
 	summaryMsg := openai.ChatCompletionMessage{
-		Role:    "user",
+		Role: "user",
 		Content: "[Earlier conversation compacted. Review the summary below and continue from where you left off. " +
 			"If the summary contains important context that should persist across sessions, save it to memory now before it is lost.]\n\n" + last.Content,
 	}
