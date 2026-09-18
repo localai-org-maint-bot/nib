@@ -5,7 +5,7 @@ import "github.com/mudler/cogito"
 // askUserArgs is the JSON-schema shape of the ask_user tool's parameters.
 type askUserArgs struct {
 	Question    string   `json:"question" jsonschema:"the question to ask the user"`
-	Options     []string `json:"options,omitempty" jsonschema:"optional list of choices the user can pick from"`
+	Options     []string `json:"options,omitempty" jsonschema:"2-6 concise choices the user picks from instead of typing. Provide these whenever the answer set is known or bounded; omit only for genuinely open-ended questions."`
 	MultiSelect bool     `json:"multi_select,omitempty" jsonschema:"when true the user may pick several options (checkbox); when false or omitted they pick exactly one (radio). Only meaningful with options."`
 }
 
@@ -42,6 +42,6 @@ func askUserToolDefinition(ask func(AskRequest) string) cogito.ToolDefinitionInt
 		&askUserTool{ask: ask},
 		askUserArgs{},
 		"ask_user",
-		"Ask the user a clarifying question and wait for their answer. Provide `options` for a multiple-choice question (omit them for free-text), and set `multi_select` to true when several options may be chosen (checkbox) rather than exactly one (radio). Use this when you need information only the user can provide.",
+		"Ask the user a clarifying question and wait for their answer. Prefer offering `options` (2-6 concise choices) so the user can pick from a list instead of typing — do this whenever the question has a known or likely set of answers. Omit `options` only for genuinely open-ended questions. Set `multi_select` to true when several options may be chosen at once (checkbox) rather than exactly one (radio). Exhaust code, configs, docs, and history before asking; use this only for information only the user can provide.",
 	)
 }
