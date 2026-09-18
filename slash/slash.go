@@ -18,6 +18,40 @@ import (
 // Kind enumerates the resolved action types.
 type Kind int
 
+// Command verbs — typed constants to avoid string literals scattered
+// through the switch in Resolve and its helpers.
+const (
+	cmdSkill   = "skill"
+	cmdAgent   = "agent"
+	cmdCompact = "compact"
+	cmdModels  = "models"
+	cmdModel   = "model"
+	cmdLoop    = "loop"
+	cmdYolo    = "yolo"
+	cmdGoal    = "goal"
+	cmdResume  = "resume"
+	cmdLogin   = "login"
+	cmdLogout  = "logout"
+	cmdAttach  = "attach"
+
+	// /attach sub-verbs
+	cmdAttachClear = "clear"
+
+	// /loop sub-verbs
+	cmdLoopStop = "stop"
+	cmdLoopList = "list"
+
+	// /goal sub-verbs
+	cmdGoalClear = "clear"
+
+	// /yolo sub-verbs
+	cmdYoloOn  = "on"
+	cmdYoloOff = "off"
+
+	// /resume flags
+	flagResumeAll = "--all"
+)
+
 const (
 	KindSend      Kind = iota // send Text to the agent
 	KindLoadSkill             // eagerly load Skill into the session prompt
@@ -35,6 +69,8 @@ const (
 	KindModelSet              // switch the session model to Model
 	KindYolo                  // toggle (or explicitly set) session-wide auto-approval
 	KindResume                // resume a recorded session (ResumeID) or open the picker
+	KindLogin                 // log in to a provider (Provider empty = list)
+	KindLogout                // log out of a provider (Provider empty = list)
 )
 
 // AttachOp enumerates the /attach sub-operations.
@@ -69,6 +105,9 @@ type Action struct {
 	AttachOp   AttachOp // KindAttach: which op
 	AttachPath string   // KindAttach+AttachStage: file to stage
 	Transcribe bool     // KindAttach+AttachStage: --transcribe/-t override
+
+	// Login/logout actions:
+	Provider string // KindLogin/KindLogout: provider ID; empty = list
 }
 
 // Expand renders a command's prompt template with the given args.
@@ -99,7 +138,7 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 	verb, rest := splitVerb(trimmed[1:])
 
 	switch verb {
-	case "skill":
+	case cmdSkill:
 		name, _ := splitVerb(rest)
 		if name == "" {
 			return Action{Kind: KindError, Err: "usage: /skill <name>"}
@@ -108,7 +147,7 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 			return Action{Kind: KindError, Err: fmt.Sprintf("unknown skill %q", name)}
 		}
 		return Action{Kind: KindLoadSkill, Skill: name}
-	case "agent":
+	case cmdAgent:
 		name, task := splitVerb(rest)
 		if name == "" {
 			return Action{Kind: KindError, Err: "usage: /agent <name> <task>"}
@@ -117,41 +156,45 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 			return Action{Kind: KindError, Err: fmt.Sprintf("unknown agent %q", name)}
 		}
 		return Action{Kind: KindSend, Text: delegation(name, task)}
-	case "compact":
+	case cmdCompact:
 		return Action{Kind: KindCompact}
-	case "models":
+	case cmdModels:
 		return Action{Kind: KindModelList}
-	case "model":
+	case cmdModel:
 		name := strings.TrimSpace(rest)
 		if name == "" {
 			return Action{Kind: KindModelPick}
 		}
 		return Action{Kind: KindModelSet, Model: name}
-	case "loop":
+	case cmdLoop:
 		return resolveLoop(rest)
-	case "yolo":
+	case cmdYolo:
 		switch strings.ToLower(strings.TrimSpace(rest)) {
 		case "":
 			return Action{Kind: KindYolo} // nil YoloOn = toggle
-		case "on":
+		case cmdYoloOn:
 			on := true
 			return Action{Kind: KindYolo, YoloOn: &on}
-		case "off":
+		case cmdYoloOff:
 			off := false
 			return Action{Kind: KindYolo, YoloOn: &off}
 		default:
 			return Action{Kind: KindError, Err: theme.YoloUsage}
 		}
-	case "goal":
+	case cmdGoal:
 		return resolveGoal(rest)
-	case "resume":
+	case cmdResume:
 		return resolveResume(rest)
-	case "attach":
+	case cmdLogin:
+		return Action{Kind: KindLogin, Provider: strings.TrimSpace(rest)}
+	case cmdLogout:
+		return Action{Kind: KindLogout, Provider: strings.TrimSpace(rest)}
+	case cmdAttach:
 		rest = strings.TrimSpace(rest)
 		switch {
 		case rest == "":
 			return Action{Kind: KindAttach, AttachOp: AttachList}
-		case rest == "clear":
+		case rest == cmdAttachClear:
 			return Action{Kind: KindAttach, AttachOp: AttachClear}
 		default:
 			transcribe := false
@@ -192,9 +235,9 @@ func resolveLoop(rest string) Action {
 	}
 	first, after := splitVerb(rest)
 	switch first {
-	case "stop":
+	case cmdLoopStop:
 		return Action{Kind: KindLoopStop, LoopID: strings.TrimSpace(after)}
-	case "list":
+	case cmdLoopList:
 		return Action{Kind: KindLoopList}
 	}
 	// Fixed interval if the first token parses as a duration.
@@ -219,7 +262,7 @@ func resolveGoal(rest string) Action {
 	switch rest {
 	case "":
 		return Action{Kind: KindGoalShow}
-	case "clear":
+	case cmdGoalClear:
 		return Action{Kind: KindGoalClear}
 	}
 	return Action{Kind: KindGoalSet, Text: rest}
@@ -236,7 +279,7 @@ func resolveResume(rest string) Action {
 	all := false
 	id := ""
 	for _, tok := range strings.Fields(rest) {
-		if tok == "--all" {
+		if tok == flagResumeAll {
 			all = true
 			continue
 		}
