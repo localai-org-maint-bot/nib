@@ -16,7 +16,16 @@ require (
 	github.com/klippa-app/go-pdfium v1.12.2
 	github.com/modelcontextprotocol/go-sdk v1.0.0
 	github.com/msuozzo/bonsai v0.4.0
+	github.com/msuozzo/bonsai/bonsai-bash v0.4.0
+	github.com/msuozzo/bonsai/bonsai-c v0.4.0
 	github.com/msuozzo/bonsai/bonsai-go v0.4.0
+	github.com/msuozzo/bonsai/bonsai-java v0.4.0
+	github.com/msuozzo/bonsai/bonsai-javascript v0.4.0
+	github.com/msuozzo/bonsai/bonsai-python v0.4.0
+	github.com/msuozzo/bonsai/bonsai-ruby v0.4.0
+	github.com/msuozzo/bonsai/bonsai-rust v0.4.0
+	github.com/msuozzo/bonsai/bonsai-tsx v0.4.0
+	github.com/msuozzo/bonsai/bonsai-typescript v0.4.0
 	github.com/mudler/cogito v0.11.1-0.20260917210357-ecfa9bd71211
 	github.com/mudler/xlog v0.0.1
 	github.com/muesli/termenv v0.16.0

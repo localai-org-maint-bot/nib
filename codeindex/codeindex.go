@@ -28,6 +28,11 @@ const (
 	SectionMethod  Section = "Method"
 	SectionConst   Section = "Constant"
 	SectionVar     Section = "Variable"
+	SectionClass   Section = "Class"
+	SectionTrait   Section = "Trait" // interface in Java, trait in Rust
+	SectionImpl    Section = "Impl"
+	SectionModule  Section = "Module"
+	SectionMacro   Section = "Macro"
 )
 
 // Entry is one element of the file skeleton.
