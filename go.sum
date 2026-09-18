@@ -169,6 +169,10 @@ github.com/modelcontextprotocol/go-sdk v1.0.0 h1:Z4MSjLi38bTgLrd/LjSmofqRqyBiVKR
 github.com/modelcontextprotocol/go-sdk v1.0.0/go.mod h1:nYtYQroQ2KQiM0/SbyEPUWQ6xs4B95gJjEalc9AQyOs=
 github.com/morikuni/aec v1.0.0 h1:nP9CBfwrvYnBRgY6qfDQkygYDmYwOilePFkwzv4dU8A=
 github.com/morikuni/aec v1.0.0/go.mod h1:BbKIizmSmc5MMPqRYbxO4ZU0S0+P200+tUnFx7PXmsc=
+github.com/msuozzo/bonsai v0.4.0 h1:WVGqsSctbGcL5ehdCdnckwRxBC3omwsmOtzKH/2tuZw=
+github.com/msuozzo/bonsai v0.4.0/go.mod h1:LDo0Dmp6qaeEoJAG83UuLDHtwHn6H1knSYKqoXMxm4M=
+github.com/msuozzo/bonsai/bonsai-go v0.4.0 h1:mDH7ExUuH9vFKLyZ63SUk4FuJ5y2Z4gEg8WcIOCzfiY=
+github.com/msuozzo/bonsai/bonsai-go v0.4.0/go.mod h1:xdTJhN+7nGFzKZM8R2fEkHM/vM9DbWYhy44nLeR+oR8=
 github.com/mudler/cogito v0.11.1-0.20260917210357-ecfa9bd71211 h1:RoUyDZhGqVv2DF9OB+tNeIwzbuFqnaXpoEm3KX80l2Y=
 github.com/mudler/cogito v0.11.1-0.20260917210357-ecfa9bd71211/go.mod h1:6sfja3lcu2nWRzEc0wwqGNu/eCG3EWgij+8s7xyUeQ4=
 github.com/mudler/xlog v0.0.1 h1:yR3/wszd3ZM6u1n96YITJZ4yUcDgqHSwvQmzUJa+8vg=

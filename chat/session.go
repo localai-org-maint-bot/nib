@@ -1160,6 +1160,13 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		opts = append(opts, cogito.WithTools(memoryToolDefinition(s.memoryStore)))
 	}
 
+	// Wire the tree-sitter index tool so the assistant can skeletonize source
+	// files — a compact structural overview before deciding what to read.
+	if s.toolEnabled("index") {
+		opts = append(opts, cogito.WithTools(indexToolDefinition(
+			func(p string) string { return resolveWorkspacePath(s.workingDir, p) })))
+	}
+
 	// Wire the native self-configuration tools so the assistant can manage its
 	// own plugins, skills, and MCP servers. requestReload re-wires the live
 	// session on the next turn after any mutating op.
@@ -1936,6 +1943,44 @@ func (s *Session) Model() string {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()
 	return s.llmModel
+}
+
+// ToolCount returns a best-effort count of registered tools: built-in tools
+// (gated by the BuiltinTools allowlist) plus MCP-sourced tools discovered so
+// far. MCP tools are discovered lazily during the first turn, so the count
+// starts at the built-in baseline and grows once tools are enumerated.
+func (s *Session) ToolCount() int {
+	n := 0
+	// Built-in tools the Session registers directly. spawn_agent via
+	// EnableAgentSpawning adds three tools (spawn_agent, check_agent,
+	// get_agent_result), so count two extras when it's enabled.
+	builtins := []string{
+		"spawn_agent",
+		"ask_user", "agent_logs",
+		"schedule_wakeup",
+		"cron", "cron_list", "cron_delete",
+		"read_image", "transcribe_audio", "read_video",
+		"memory", "index",
+	}
+	for _, name := range builtins {
+		if s.toolEnabled(name) {
+			n++
+			if name == "spawn_agent" {
+				n += 2 // check_agent + get_agent_result
+			}
+		}
+	}
+	// Self-config tools (list_plugins, install_plugin, etc.).
+	for _, d := range selfConfigToolDefs(s.configurator, s.requestReload) {
+		if s.toolEnabled(d.name) {
+			n++
+		}
+	}
+	// MCP-sourced tools discovered so far (populated lazily during turns).
+	s.provenanceMu.Lock()
+	n += len(s.externalToolNames)
+	s.provenanceMu.Unlock()
+	return n
 }
 
 // currentLLM returns the client and the model name it was built for as one
