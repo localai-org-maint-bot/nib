@@ -178,3 +178,18 @@ func TestProviderModelPickerNoListTypesName(t *testing.T) {
 		t.Fatalf("typed-mode hint missing:\n%s", view)
 	}
 }
+
+func TestModelPickerAcceptsTypedNameForPartialList(t *testing.T) {
+	m := newLoginTestModel(t)
+	m.openModelPicker()
+	next, _ := m.Update(modelListMsg{requestID: m.modelPicker.requestID, models: []string{"gemini-2.5-pro"}, partial: true})
+	m = next.(Model)
+	m, _ = press(t, m, typeText("gemini-9-ultra"))
+	if view := m.View(); !strings.Contains(view, "enter uses the typed name") {
+		t.Fatalf("partial list should say a typed name works:\n%s", view)
+	}
+	m, _ = press(t, m, keyEnter)
+	if m.session.Model() != "gemini-9-ultra" {
+		t.Fatalf("model = %q, want the typed name", m.session.Model())
+	}
+}

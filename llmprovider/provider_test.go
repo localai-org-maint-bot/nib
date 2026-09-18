@@ -1,7 +1,10 @@
 package llmprovider
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -69,5 +72,74 @@ func TestModelsEndpointUsesProviderDefaults(t *testing.T) {
 	}
 	if _, _, err := ModelsEndpoint(types.ModelProviderConfig{Provider: "anthropic"}, store); !errors.Is(err, ErrNoModelList) {
 		t.Fatalf("anthropic: err=%v, want ErrNoModelList", err)
+	}
+}
+
+func TestListModelsDispatchesByProtocol(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/models": // Anthropic Messages API and OpenAI-compatible alike
+			if r.Header.Get("x-api-key") == "sk-ant" {
+				_, _ = w.Write([]byte(`{"data":[{"id":"claude-x"}],"has_more":false}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"oai-x","object":"model"}]}`))
+		case "/v1beta/models":
+			_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-x","supportedGenerationMethods":["generateContent"]}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+
+	cases := []struct {
+		cfg  types.ModelProviderConfig
+		want string
+	}{
+		{types.ModelProviderConfig{Provider: "anthropic", BaseURL: srv.URL, APIKey: "sk-ant"}, "claude-x"},
+		{types.ModelProviderConfig{Provider: "google", BaseURL: srv.URL + "/v1beta", APIKey: "AIza"}, "gemini-x"},
+		{types.ModelProviderConfig{Provider: "", BaseURL: srv.URL + "/v1"}, "oai-x"},
+	}
+	for _, c := range cases {
+		got, err := ListModels(ctx, c.cfg, nil)
+		if err != nil || len(got) != 1 || got[0] != c.want {
+			t.Errorf("%s: got %v, %v; want [%s]", c.cfg.Provider, got, err, c.want)
+		}
+	}
+
+	// A native adapter without credentials reports that, not "no list".
+	if _, err := ListModels(ctx, types.ModelProviderConfig{Provider: "anthropic", BaseURL: srv.URL}, nil); err == nil || errors.Is(err, ErrNoModelList) {
+		t.Fatalf("anthropic without a key: err = %v, want a credentials error", err)
+	}
+}
+
+func TestListModelsWithoutListerIsErrNoModelList(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_API_KEY", "az-key")
+	cfg := types.ModelProviderConfig{Provider: "azure", BaseURL: "https://example.openai.azure.com/openai/v1", Model: "gpt"}
+	if _, err := ListModels(context.Background(), cfg, nil); !errors.Is(err, ErrNoModelList) {
+		t.Fatalf("azure: err = %v, want ErrNoModelList", err)
+	}
+}
+
+func TestListModelChoicesFlagsPartialLists(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_API_KEY", "az-key")
+	t.Setenv("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-4.1=prod")
+	cfg := types.ModelProviderConfig{Provider: "azure", BaseURL: "https://example.openai.azure.com/openai/v1", Model: "gpt-4.1"}
+	ids, partial, err := ListModelChoices(context.Background(), cfg, nil)
+	if err != nil || !partial || len(ids) != 1 || ids[0] != "gpt-4.1" {
+		t.Fatalf("azure map: ids=%v partial=%v err=%v", ids, partial, err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"m","object":"model"}]}`))
+	}))
+	defer srv.Close()
+	if _, partial, _ := ListModelChoices(context.Background(), types.ModelProviderConfig{BaseURL: srv.URL}, nil); partial {
+		t.Fatal("an endpoint's own /models list is complete, not partial")
 	}
 }

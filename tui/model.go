@@ -458,6 +458,7 @@ type responseMsg struct {
 type modelListMsg struct {
 	requestID uint64
 	models    []string
+	partial   bool // the list is a suggestion: typed names are accepted too
 	err       error
 }
 
@@ -1319,6 +1320,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			m.modelPicker.setModels(msg.models, m.session.Model())
 			m.modelPicker.typed = m.modelPicker.target != nil && len(msg.models) == 0
+			m.modelPicker.partial = msg.partial
 			if m.modelPicker.query != "" {
 				m.modelPicker.filter()
 			}
@@ -2022,14 +2024,12 @@ func (m Model) loadModelsCmd(requestID uint64) tea.Cmd {
 	return func() tea.Msg {
 		lookupCtx, cancel := context.WithTimeout(m.ctx, chat.ModelListTimeout)
 		defer cancel()
-		var models []string
-		var err error
+		id := ""
 		if target != nil {
-			models, err = m.session.ListProviderModels(lookupCtx, target.ID)
-		} else {
-			models, err = m.session.ListModels(lookupCtx)
+			id = target.ID
 		}
-		return modelListMsg{requestID: requestID, models: models, err: err}
+		models, partial, err := m.session.ModelChoices(lookupCtx, id)
+		return modelListMsg{requestID: requestID, models: models, partial: partial, err: err}
 	}
 }
 

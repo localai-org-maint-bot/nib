@@ -2060,29 +2060,21 @@ func (s *Session) ListModels(ctx context.Context) ([]string, error) {
 }
 
 func (s *Session) listModels(ctx context.Context, provider types.ModelProviderConfig) ([]string, error) {
+	ids, _, err := s.modelChoices(ctx, provider)
+	return ids, err
+}
+
+// modelChoices lists provider's models and whether the list is partial (a
+// suggestion that other names may be valid beside; see
+// llmprovider.ListModelChoices).
+func (s *Session) modelChoices(ctx context.Context, provider types.ModelProviderConfig) ([]string, bool, error) {
 	if llmprovider.IsCodex(provider) {
 		if model := s.Model(); model != "" {
-			return []string{model}, nil
+			return []string{model}, false, nil
 		}
-		return nil, fmt.Errorf("Codex app-server model is not configured")
+		return nil, false, fmt.Errorf("Codex app-server model is not configured")
 	}
-	baseURL, apiKey, err := llmprovider.ModelsEndpoint(provider, s.credStore)
-	if err != nil {
-		return nil, err
-	}
-	cfg := openai.DefaultConfig(apiKey)
-	cfg.BaseURL = baseURL
-	resp, err := openai.NewClientWithConfig(cfg).ListModels(ctx)
-	if err != nil {
-		return nil, err
-	}
-	models := make([]string, 0, len(resp.Models))
-	for _, m := range resp.Models {
-		if m.ID != "" {
-			models = append(models, m.ID)
-		}
-	}
-	return models, nil
+	return llmprovider.ListModelChoices(ctx, provider, s.credStore)
 }
 
 // fetchEndpointModels populates s.endpointModels with the model IDs the
@@ -2222,10 +2214,13 @@ func (s *Session) SwitchModel(ctx context.Context, name string) (string, error) 
 	}
 
 	lookupCtx, cancel := context.WithTimeout(ctx, ModelListTimeout)
-	models, err := s.ListModels(lookupCtx)
+	models, partial, err := s.modelChoices(lookupCtx, s.resolvedSessionProvider())
 	cancel()
 
 	switch {
+	case partial && !slices.Contains(models, name):
+		s.SetModel(name)
+		return "model: " + name + " (not in the suggested list; the provider decides)", nil
 	case err != nil:
 		s.SetModel(name)
 		return "model: " + name + " (unverified: " + err.Error() + ")", nil

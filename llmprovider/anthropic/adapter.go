@@ -100,14 +100,7 @@ func (l *LLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompl
 		return cogito.LLMReply{}, cogito.LLMUsage{}, fmt.Errorf("anthropic: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("anthropic-version", anthropicVersion)
-	if l.config.IsOAuth {
-		req.Header.Set("Authorization", "Bearer "+l.config.Token)
-		req.Header.Set("anthropic-beta", oauthBetaHeader)
-	} else {
-		req.Header.Set("x-api-key", l.config.APIKey)
-	}
+	l.setAuthHeaders(req)
 
 	resp, err := l.client.Do(req)
 	if err != nil {
@@ -124,6 +117,20 @@ func (l *LLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompl
 	}
 
 	return l.translateResponse(respBody, request.Model)
+}
+
+// setAuthHeaders applies the version and credential headers every Messages
+// API call carries: x-api-key for API keys, Bearer plus the OAuth beta flag
+// for a /login OAuth token.
+func (l *LLM) setAuthHeaders(req *http.Request) {
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("anthropic-version", anthropicVersion)
+	if l.config.IsOAuth {
+		req.Header.Set("Authorization", "Bearer "+l.config.Token)
+		req.Header.Set("anthropic-beta", oauthBetaHeader)
+	} else {
+		req.Header.Set("x-api-key", l.config.APIKey)
+	}
 }
 
 // ---------------------------------------------------------------------------
