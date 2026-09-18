@@ -15,7 +15,7 @@ func TestContextBudgetSubtractsTheReserve(t *testing.T) {
 }
 
 // The floor exists for a window that is itself absent or nonsensical. With the
-// reserve clamped to a quarter of the window, a positive window always keeps a
+// reserve clamped to half of the window, a positive window always keeps a
 // positive budget, so this is the only way to reach zero.
 func TestContextBudgetFloorsAtZero(t *testing.T) {
 	cfg := types.CompactionConfig{ReserveTokens: 4096}
@@ -26,14 +26,15 @@ func TestContextBudgetFloorsAtZero(t *testing.T) {
 	}
 }
 
-// Above 4×ReserveTokens the clamp does nothing at all: the reserve is the flat
+// Above 2×ReserveTokens the clamp does nothing at all: the reserve is the flat
 // configured count, exactly as the spec chose. A reply does not get longer
 // because the window did.
 func TestContextBudgetKeepsTheFlatReserveOnALargeWindow(t *testing.T) {
 	cfg := types.CompactionConfig{ReserveTokens: 4096}
-	// 16384 is the boundary: window/4 == ReserveTokens, flat still applies.
+	// 8192 is the boundary: window/2 == ReserveTokens, flat still applies.
 	for _, tc := range []struct{ window, want int }{
-		{16384, 12288},   // 16384 - 4096
+		{8192, 4096},    // 8192 - 4096, at the boundary
+		{16384, 12288},  // 16384 - 4096
 		{128000, 123904}, // 128000 - 4096
 		{262144, 258048}, // 262144 - 4096
 	} {
@@ -44,15 +45,15 @@ func TestContextBudgetKeepsTheFlatReserveOnALargeWindow(t *testing.T) {
 }
 
 // Below the boundary the flat reserve is incoherent — at 4096 it would claim
-// the entire window — so it is clamped to a quarter and compaction keeps
+// the entire window — so it is clamped to half and compaction keeps
 // working. This is not the percentage reserve the spec rejected: it applies
 // only here, and the trigger is still Threshold × budget.
 func TestContextBudgetClampsTheReserveOnASmallWindow(t *testing.T) {
 	cfg := types.CompactionConfig{ReserveTokens: 4096}
 	for _, tc := range []struct{ window, want int }{
-		{4096, 3072},   // reserve clamped 4096 → 1024
-		{2048, 1536},   // reserve clamped 4096 → 512
-		{16383, 12288}, // just under the boundary: reserve clamped to 4095
+		{4096, 2048},  // reserve clamped 4096 → 2048
+		{2048, 1024},  // reserve clamped 4096 → 1024
+		{8191, 4096},  // just under the boundary: reserve clamped to 4095
 	} {
 		if got := ContextBudget(cfg, tc.window); got != tc.want {
 			t.Fatalf("budget(%d) = %d, want %d", tc.window, got, tc.want)
@@ -81,14 +82,14 @@ func TestContextBudgetDefaultsTheReserveWhenUnset(t *testing.T) {
 	}
 }
 
-// The default lands BEFORE the quarter-window clamp, so the two stay coherent:
+// The default lands BEFORE the half-window clamp, so the two stay coherent:
 // a small window clamps the default rather than the clamp being bypassed by a
 // zero. Same numbers as TestContextBudgetClampsTheReserveOnASmallWindow.
 func TestContextBudgetDefaultedReserveIsStillClamped(t *testing.T) {
 	var unset types.CompactionConfig
 	for _, tc := range []struct{ window, want int }{
-		{4096, 3072}, // default 4096 clamped to 1024
-		{2048, 1536}, // default 4096 clamped to 512
+		{4096, 2048}, // default 4096 clamped to 2048
+		{2048, 1024}, // default 4096 clamped to 1024
 	} {
 		if got := ContextBudget(unset, tc.window); got != tc.want {
 			t.Fatalf("budget(%d) = %d, want %d: the default escaped the clamp", tc.window, got, tc.want)
@@ -125,11 +126,11 @@ func TestReportersConfigurationNowTriggersBeforeTheLimit(t *testing.T) {
 // compaction for the model that had just overflowed.
 func TestShouldAutoCompactStillFiresOnASmallWindow(t *testing.T) {
 	cfg := types.CompactionConfig{Threshold: 0.8, ReserveTokens: 4096}
-	// budget 3072, trigger at int(3072*0.8) = 2457.
-	if shouldAutoCompact(cfg, 4096, 2456) {
+	// budget 2048, trigger at int(2048*0.8) = 1638.
+	if shouldAutoCompact(cfg, 4096, 1637) {
 		t.Fatal("fired below the trigger")
 	}
-	if !shouldAutoCompact(cfg, 4096, 2457) {
+	if !shouldAutoCompact(cfg, 4096, 1638) {
 		t.Fatal("a 4096-token model got no auto-compaction at all")
 	}
 	if shouldAutoCompact(cfg, 4096, 100) {
@@ -138,7 +139,7 @@ func TestShouldAutoCompactStillFiresOnASmallWindow(t *testing.T) {
 }
 
 // The flat reserve is untouched on a real window: the boundary between the two
-// regimes is 4×ReserveTokens, and the large side must behave exactly as it did
+// regimes is 2×ReserveTokens, and the large side must behave exactly as it did
 // before the clamp existed.
 func TestShouldAutoCompactUsesTheFlatReserveOnALargeWindow(t *testing.T) {
 	cfg := types.CompactionConfig{Threshold: 0.8, ReserveTokens: 4096}

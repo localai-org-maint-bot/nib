@@ -66,7 +66,7 @@ func TestShouldAutoCompact(t *testing.T) {
 	// prevent). There is therefore no longer a config that budgets against the
 	// whole window, which is the point.
 	//
-	// 200 is under window/4, so the clamp does not bite: budget 800, trigger at
+	// 200 is under window/2, so the clamp does not bite: budget 800, trigger at
 	// int(800*0.8) = 640.
 	cfg := types.CompactionConfig{MaxContextTokens: 1000, Threshold: 0.8, ReserveTokens: 200}
 	if shouldAutoCompact(cfg, 1000, 639) {

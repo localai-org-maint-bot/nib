@@ -378,22 +378,40 @@ func forgetAbsentIDs(ids map[string]string, msgs []openai.ChatCompletionMessage)
 // tokensOf is the byte/4 estimate compaction already uses, applied to one body.
 func tokensOf(s string) int { return len(s) / 4 }
 
+// trailingTailBudget is the maximum bytes of tool output that trailingToolRun
+// protects from stubbing. Results beyond this budget — measured from the most
+// recent — become eligible for size pruning, so a single huge output cannot
+// monopolize the protected tail.
+const trailingTailBudget = 64 * 1024
+
 // trailingToolRun returns the ids of the contiguous run of tool results at the
-// END of msgs. Those are the results the model is about to reason over, so they
-// are never stubbed.
+// END of msgs, up to trailingTailBudget bytes. Those are the results the model
+// is about to reason over, so they are never stubbed — but only up to the
+// budget, so that a multi-megabyte output does not make the entire trailing run
+// untouchable.
+//
+// The most recent result is always protected regardless of size: the model
+// just received it and needs it to reason. The budget prevents additional
+// trailing results from stacking up behind it.
 //
 // This does not break monotonicity: as the conversation grows they stop being
 // trailing and become eligible, which is a kept->stubbed transition — the only
 // direction the policy ever moves.
 func trailingToolRun(msgs []openai.ChatCompletionMessage) map[string]bool {
 	protected := map[string]bool{}
+	var size int
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if msgs[i].Role != "tool" {
 			break
 		}
-		if msgs[i].ToolCallID != "" {
-			protected[msgs[i].ToolCallID] = true
+		if msgs[i].ToolCallID == "" {
+			continue
 		}
+		if size >= trailingTailBudget {
+			break
+		}
+		size += len(msgs[i].Content)
+		protected[msgs[i].ToolCallID] = true
 	}
 	return protected
 }

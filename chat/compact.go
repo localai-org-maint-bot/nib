@@ -75,7 +75,7 @@ func shouldAutoCompact(cfg types.CompactionConfig, window, promptTokens int) boo
 		return false
 	}
 	budget := ContextBudget(cfg, window)
-	// Defensive only: ContextBudget clamps the reserve to a quarter of the
+	// Defensive only: ContextBudget clamps the reserve to half of the
 	// window, so a positive window always has a positive budget and the
 	// check above already rejected the rest. It stays because a zero budget
 	// would make the trigger fire on every single turn, which is the one
@@ -193,8 +193,7 @@ func (s *Session) overflowRetries() int {
 }
 
 // ContextBudget is the window minus the reserve held back for the response,
-// where the reserve is never allowed to claim more than a quarter of the
-// window.
+// where the reserve is never allowed to claim more than half of the window.
 //
 // Exported so the TUI's context badge can be drawn against the same number
 // auto-compaction triggers on. A badge that budgeted against the raw window
@@ -202,7 +201,7 @@ func (s *Session) overflowRetries() int {
 // the badge exists to predict.
 //
 // The clamp is not the percentage reserve the spec rejected. The reserve stays
-// a flat cfg.ReserveTokens for every window of 4×ReserveTokens or more — 16384
+// a flat cfg.ReserveTokens for every window of 2×ReserveTokens or more — 8192
 // and up at the 4096 default — and the trigger is still Threshold × budget, not
 // a percentage of the window. The clamp bites only where the flat number is
 // incoherent relative to the window it is being subtracted from: without it a
@@ -211,21 +210,30 @@ func (s *Session) overflowRetries() int {
 // window is learned from an overflow error, LEARNING a real 4096 window would
 // be what disabled compaction for the model that just overflowed — the exact
 // inverse of the point of learning it.
+//
+// The ceiling is half the window rather than a quarter so that an explicitly
+// large reserve can hold back up to half the context for the model's response
+// after compaction — matching maki's MAX_RESERVED_PERCENT. A model that just
+// hit compaction may need to emit a long response (a rewritten file, a detailed
+// plan), and the larger ceiling gives that response room. The flat 4096 default
+// is untouched on any window of 8192 or more, so only small windows or
+// deliberately large reserves are affected.
+//
 // The default is applied HERE as well as in config.Load, the same way
 // shouldAutoCompact defaults Threshold at its use site. An embedder calling
 // chat.NewSession directly never passes through config.Load, and an unset
 // ReserveTokens would then reserve nothing — which is precisely the failure
 // this budget exists to prevent, arriving through the one door nobody watches.
 //
-// It lands BEFORE the quarter-window clamp, so the two stay coherent: a small
-// window still clamps the default (a 8192-token model reserves 2048, not 4096)
+// It lands BEFORE the half-window clamp, so the two stay coherent: a small
+// window still clamps the default (a 4096-token model reserves 2048, not 4096)
 // rather than the clamp being bypassed by a zero.
 func ContextBudget(cfg types.CompactionConfig, window int) int {
 	reserve := cfg.ReserveTokens
 	if reserve <= 0 {
 		reserve = defaultReserveTokens
 	}
-	reserve = min(reserve, window/4)
+	reserve = min(reserve, window/2)
 	b := window - reserve
 	if b < 0 {
 		return 0
