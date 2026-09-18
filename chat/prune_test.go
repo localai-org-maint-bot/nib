@@ -406,6 +406,36 @@ func TestPruneNeverTouchesTheTrailingToolResults(t *testing.T) {
 	}
 }
 
+// The trailing run is protected up to trailingTailBudget bytes. Beyond that,
+// older trailing results become eligible for size pruning — a single huge
+// output must not make the entire trailing run untouchable.
+func TestPruneBudgetsTheTrailingTail(t *testing.T) {
+	// Each result is 80KB (20000 tokens × 4 bytes). The first (c2, most
+	// recent) is always protected. The second (c1) is not, because the
+	// accumulated size after c2 already exceeds trailingTailBudget.
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 20000),
+		callMsg("c2", "read", `{"path":"b.go"}`), bigResult("c2", 20000),
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 1000, LowWaterTokens: 1, MinResultTokens: 1}
+
+	out, newly, _ := pruneToolOutputs(msgs, cfg, map[string]string{})
+
+	stubbed := map[string]bool{}
+	for _, n := range newly {
+		stubbed[n.id] = true
+	}
+	if stubbed["c2"] {
+		t.Fatal("the most recent result must always be protected")
+	}
+	if !stubbed["c1"] {
+		t.Fatal("a trailing result beyond the byte budget should be eligible for stubbing")
+	}
+	if out[3].Content != msgs[3].Content {
+		t.Fatal("the most recent result was modified")
+	}
+}
+
 // Small results are not worth a cache invalidation.
 func TestPruneRespectsTheMinimumResultSize(t *testing.T) {
 	msgs := []openai.ChatCompletionMessage{

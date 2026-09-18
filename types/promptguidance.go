@@ -46,6 +46,7 @@ func toolGuidance(builtinTools []string) string {
 	edit := toolExposed(builtinTools, "edit")
 	glob := toolExposed(builtinTools, "glob")
 	grep := toolExposed(builtinTools, "grep")
+	index := toolExposed(builtinTools, "index")
 
 	paragraphs := []string{actGuidance}
 
@@ -87,6 +88,10 @@ func toolGuidance(builtinTools []string) string {
 				" for these — the dedicated tools are faster and return structured output."
 		}
 		paragraphs = append(paragraphs, p)
+	}
+
+	if index {
+		paragraphs = append(paragraphs, "index returns a compact skeleton of a source file — imports, types, functions, and their line ranges — without the full source. Use it to understand a file's structure before reading it, or to decide which section of a large file to read.")
 	}
 
 	if read {
