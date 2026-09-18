@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mudler/nib/auth/oauth"
@@ -12,6 +13,13 @@ import (
 // LoginAPIKey creates and stores an API-key credential for a provider.
 // Returns the credential (with AuthorizedAt set).
 func LoginAPIKey(store *Store, def provider.Definition, apiKey string) (Credential, error) {
+	return LoginAPIKeyAt(store, def, apiKey, "")
+}
+
+// LoginAPIKeyAt is LoginAPIKey with an endpoint override stored alongside the
+// key, for providers without a default base URL (see
+// provider.Definition.NeedsBaseURL). An empty baseURL keeps the default.
+func LoginAPIKeyAt(store *Store, def provider.Definition, apiKey, baseURL string) (Credential, error) {
 	if apiKey == "" {
 		return Credential{}, fmt.Errorf("auth: empty API key for %s", def.ID)
 	}
@@ -19,6 +27,7 @@ func LoginAPIKey(store *Store, def provider.Definition, apiKey string) (Credenti
 		ProviderID: def.ID,
 		Kind:       CredentialAPIKey,
 		APIKey:     apiKey,
+		BaseURL:    strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 	}
 	if err := store.Save(cred); err != nil {
 		return Credential{}, fmt.Errorf("auth: save %s credential: %w", def.ID, err)

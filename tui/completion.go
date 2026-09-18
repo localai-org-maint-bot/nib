@@ -31,7 +31,7 @@ type compItem struct {
 // buildCompItems builds the tagged completion list: the built-in verbs first,
 // then the command, skill, and agent registries.
 func buildCompItems(cmds []types.CommandConfig, skills []types.Skill, agents []types.AgentTypeConfig) []compItem {
-	items := make([]compItem, 0, 7+len(cmds)+len(skills)+len(agents))
+	items := make([]compItem, 0, 10+len(cmds)+len(skills)+len(agents))
 	items = append(items,
 		compItem{Cat: compBuiltin, Name: theme.CompLoopName, Desc: theme.CompLoopDesc, Insert: "/" + theme.CompLoopName + " "},
 		compItem{Cat: compBuiltin, Name: theme.CompCompactName, Desc: theme.CompCompactDesc, Insert: "/" + theme.CompCompactName + " "},
@@ -44,6 +44,8 @@ func buildCompItems(cmds []types.CommandConfig, skills []types.Skill, agents []t
 		compItem{Cat: compBuiltin, Name: theme.CompAttachName, Desc: theme.CompAttachDesc, Insert: "/" + theme.CompAttachName + " "},
 		compItem{Cat: compBuiltin, Name: theme.CompYoloName, Desc: theme.CompYoloDesc, Insert: "/" + theme.CompYoloName + " "},
 		compItem{Cat: compBuiltin, Name: theme.CompResumeName, Desc: theme.CompResumeDesc, Insert: "/" + theme.CompResumeName + " "},
+		compItem{Cat: compBuiltin, Name: theme.CompLoginName, Desc: theme.CompLoginDesc, Insert: "/" + theme.CompLoginName + " "},
+		compItem{Cat: compBuiltin, Name: theme.CompLogoutName, Desc: theme.CompLogoutDesc, Insert: "/" + theme.CompLogoutName + " "},
 	)
 	for _, c := range cmds {
 		items = append(items, compItem{Cat: compCmd, Name: c.Name, Desc: c.Description, Insert: "/" + c.Name + " "})

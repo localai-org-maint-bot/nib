@@ -21,8 +21,8 @@ func sampleRegistries() ([]types.CommandConfig, []types.Skill, []types.AgentType
 func TestBuildAndFilter(t *testing.T) {
 	cmds, skills, agents := sampleRegistries()
 	items := buildCompItems(cmds, skills, agents)
-	if len(items) != 11 {
-		t.Fatalf("want 11 items, got %d", len(items))
+	if len(items) != 13 {
+		t.Fatalf("want 13 items, got %d", len(items))
 	}
 	got := filterComp(items, "rev")
 	if len(got) != 2 {
@@ -33,6 +33,9 @@ func TestBuildAndFilter(t *testing.T) {
 	}
 	if got := filterComp(items, "yolo"); len(got) != 1 || got[0].Insert != "/yolo " {
 		t.Fatalf("filter 'yolo' should surface the builtin, got %+v", got)
+	}
+	if got := filterComp(items, "log"); len(got) != 2 || got[0].Insert != "/login " || got[1].Insert != "/logout " {
+		t.Fatalf("filter 'log' should surface /login and /logout, got %+v", got)
 	}
 	for _, it := range items {
 		switch it.Cat {

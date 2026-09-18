@@ -25,8 +25,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/attachments"
 	"github.com/mudler/nib/attachstage"
-	"github.com/mudler/nib/auth"
 	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/llmprovider"
 	"github.com/mudler/nib/loop"
 	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/plugin"
@@ -376,6 +376,11 @@ type Model struct {
 	modelPicker        modelPicker
 	modelPickerRequest uint64
 
+	// /login: provider picker, API-key form, and the OAuth/device wait.
+	providerPicker providerPicker
+	loginForm      loginForm
+	loginWait      loginWait
+
 	// Pending message queue: text typed while a run is in flight. Entries are
 	// editable until they fire (FIFO) into the live run at step boundaries.
 	// queueSel is the entry highlighted for ^e/^x when the composer is empty.
@@ -549,12 +554,6 @@ type toolResultMsg chat.ToolResult
 type sessionReadyMsg struct {
 	session *chat.Session
 	err     error
-}
-
-// loginResultMsg is sent when an in-TUI login flow completes.
-type loginResultMsg struct {
-	cred auth.Credential
-	err  error
 }
 
 // NewModel creates a new TUI model
@@ -875,6 +874,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logVP, vpCmd = m.logVP.Update(msg)
 			return m, vpCmd
 		}
+		// The /login dialogs own ordinary keys while open, like the model
+		// picker below; Ctrl+C falls through to interrupt-or-quit.
+		if m.loginWait.active && msg.Type != tea.KeyCtrlC {
+			if msg.Type == tea.KeyEsc {
+				m.cancelLoginWait()
+				m.updateViewport()
+			}
+			return m, nil
+		}
+		if m.loginForm.active && msg.Type != tea.KeyCtrlC {
+			return m.handleLoginFormKey(msg)
+		}
+		if m.providerPicker.active && msg.Type != tea.KeyCtrlC {
+			return m.handleProviderPickerKey(msg)
+		}
 		// The picker owns ordinary keys while open. Ctrl+C deliberately falls
 		// through to the application's existing interrupt-or-quit path.
 		if m.modelPicker.active && msg.Type != tea.KeyCtrlC {
@@ -889,8 +903,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modelPicker.backspace()
 			case tea.KeyEnter:
 				if choice, ok := m.modelPicker.choice(); ok {
-					m.session.SetModel(choice)
-					m.appendMessage(ChatMessage{Role: "agent", Content: "model: " + choice})
+					if target := m.modelPicker.target; target != nil {
+						if err := m.session.SwitchProvider(target.ID, choice); err != nil {
+							m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
+						} else {
+							m.appendMessage(ChatMessage{Role: "agent", Content: "provider: " + target.Name + " · model: " + choice + " · " + theme.ProviderSavedDefault})
+						}
+					} else {
+						m.session.SetModel(choice)
+						m.appendMessage(ChatMessage{Role: "agent", Content: "model: " + choice})
+					}
 					m.modelPicker.close()
 				}
 			case tea.KeySpace:
@@ -1284,11 +1306,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.modelPicker.active || !m.modelPicker.loading || msg.requestID != m.modelPicker.requestID {
 			return m, nil
 		}
-		if msg.err != nil {
+		switch {
+		case msg.err != nil && (m.modelPicker.target != nil || errors.Is(msg.err, llmprovider.ErrNoModelList)):
+			// Switching provider must not dead-end on a missing or failing
+			// model list: let the user type the model name instead.
+			m.modelPicker.loading = false
+			m.modelPicker.typed = true
+			m.modelPicker.listErr = msg.err.Error()
+		case msg.err != nil:
 			m.modelPicker.close()
 			m.appendMessage(ChatMessage{Role: "error", Content: msg.err.Error()})
-		} else {
+		default:
 			m.modelPicker.setModels(msg.models, m.session.Model())
+			m.modelPicker.typed = m.modelPicker.target != nil && len(msg.models) == 0
 			if m.modelPicker.query != "" {
 				m.modelPicker.filter()
 			}
@@ -1470,15 +1500,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case loginResultMsg:
-		m.loading = false
-		m.status = ""
-		if msg.err != nil {
-			m.appendMessage(ChatMessage{Role: "error", Content: "Login failed: " + msg.err.Error()})
-		} else {
-			m.appendMessage(ChatMessage{Role: "agent", Content: "Logged in as " + msg.cred.DisplayLabel()})
-		}
+		cmd := m.handleLoginResult(msg)
 		m.updateViewport()
-		return m, nil
+		return m, cmd
 
 	case compactNoticeMsg:
 		m.appendMessage(ChatMessage{Role: "agent", Content: compactNotice(msg[0], msg[1])})
@@ -1865,33 +1889,21 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		return nil
 	case slash.KindLogin:
 		if action.Provider == "" {
-			m.appendMessage(ChatMessage{Role: "agent", Content: m.session.LoginList()})
+			m.openProviderPicker(false)
 			return nil
 		}
-		flow, err := m.session.StartLogin(m.ctx, action.Provider)
-		if err != nil {
-			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
+		e, ok := m.providerEntry(action.Provider)
+		if !ok {
+			m.appendMessage(ChatMessage{Role: "error", Content: fmt.Sprintf("unknown provider %q · /login lists them", action.Provider)})
 			return nil
 		}
-		m.appendMessage(ChatMessage{Role: "agent", Content: flow.Prompt})
-		if flow.URL != "" {
-			openBrowser(flow.URL)
-		}
-		m.loading = true
-		m.interruptArmed = false
-		m.status = "Waiting for login…"
-		return m.loginCompleteCmd(flow)
+		return m.useProvider(e, true)
 	case slash.KindLogout:
 		if action.Provider == "" {
-			m.appendMessage(ChatMessage{Role: "agent", Content: m.session.LoginList()})
+			m.openProviderPicker(true)
 			return nil
 		}
-		notice, err := m.session.Logout(action.Provider)
-		if err != nil {
-			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
-		} else {
-			m.appendMessage(ChatMessage{Role: "agent", Content: notice})
-		}
+		m.logout(action.Provider)
 		return nil
 	case slash.KindResume:
 		return m.startResume(action.ResumeAll, action.ResumeID)
@@ -1993,13 +2005,30 @@ func (m *Model) openModelPicker() tea.Cmd {
 	return m.loadModelsCmd(m.modelPickerRequest)
 }
 
+// openProviderModelPicker is the model picker for a provider the session is
+// about to switch to: the switch happens on Enter, so Esc leaves the session
+// exactly as it was (the login, if any, is kept).
+func (m *Model) openProviderModelPicker(e chat.ProviderEntry) tea.Cmd {
+	m.modelPickerRequest++
+	m.modelPicker.open(m.modelPickerRequest)
+	m.modelPicker.target = &e
+	return m.loadModelsCmd(m.modelPickerRequest)
+}
+
 // loadModelsCmd bounds model discovery without blocking Bubble Tea's Update
 // goroutine.
 func (m Model) loadModelsCmd(requestID uint64) tea.Cmd {
+	target := m.modelPicker.target
 	return func() tea.Msg {
 		lookupCtx, cancel := context.WithTimeout(m.ctx, chat.ModelListTimeout)
 		defer cancel()
-		models, err := m.session.ListModels(lookupCtx)
+		var models []string
+		var err error
+		if target != nil {
+			models, err = m.session.ListProviderModels(lookupCtx, target.ID)
+		} else {
+			models, err = m.session.ListModels(lookupCtx)
+		}
 		return modelListMsg{requestID: requestID, models: models, err: err}
 	}
 }
@@ -2108,14 +2137,6 @@ func (m Model) compactCmd() tea.Cmd {
 	return func() tea.Msg {
 		before, after, err := m.session.CompactHistory()
 		return compactResultMsg{before: before, after: after, err: err}
-	}
-}
-
-// loginCompleteCmd finishes an in-TUI login flow off the event loop.
-func (m Model) loginCompleteCmd(flow *auth.LoginFlow) tea.Cmd {
-	return func() tea.Msg {
-		cred, err := flow.Complete(m.ctx)
-		return loginResultMsg{cred: cred, err: err}
 	}
 }
 
@@ -2443,8 +2464,8 @@ func (m Model) renderComposer(w int) string {
 	case m.awaitingResume:
 		// no input: unlike ask_user, /resume has no free-text fallback — the
 		// picker lives in the viewport dialog block and swallows every key.
-	case m.modelPicker.active:
-		// no input: the model picker dialog handles all keys.
+	case m.modelPicker.active, m.providerPicker.active, m.loginForm.active, m.loginWait.active:
+		// no input: the picker/login dialog handles all keys.
 	default:
 		composer.WriteString(m.textarea.View())
 	}
@@ -2697,6 +2718,15 @@ func (m Model) currentDialogs() []render.Dialog {
 	if m.modelPicker.active {
 		dialogs = append(dialogs, m.buildModelPickerDialog())
 	}
+	if m.providerPicker.active {
+		dialogs = append(dialogs, m.providerPicker.dialog())
+	}
+	if m.loginForm.active {
+		dialogs = append(dialogs, m.loginForm.dialog())
+	}
+	if m.loginWait.active {
+		dialogs = append(dialogs, m.loginWait.dialog())
+	}
 	return dialogs
 }
 
@@ -2709,7 +2739,8 @@ func (m Model) showingViewport() bool {
 	if m.showLogs {
 		return false
 	}
-	return len(m.messages) > 0 || m.loading || m.awaitingApproval || m.awaitingAsk || m.awaitingResume || m.modelPicker.active
+	return len(m.messages) > 0 || m.loading || m.awaitingApproval || m.awaitingAsk || m.awaitingResume || m.modelPicker.active ||
+		m.providerPicker.active || m.loginForm.active || m.loginWait.active
 }
 
 // reasoningBoxHit reports whether a terminal-relative mouse Y lands inside
@@ -3070,8 +3101,18 @@ func (m Model) helpLine() string {
 		// the footer keeps showing the key list unconditionally so the user
 		// never loses sight of which key cancels the arm.
 		return theme.HelpResume
+	case m.modelPicker.active && m.modelPicker.typed:
+		return theme.ModelPickerTypeName
 	case m.modelPicker.active:
 		return theme.ModelPickerKeyHint
+	case m.providerPicker.active && m.providerPicker.logout:
+		return theme.ProviderPickerLogoutHint
+	case m.providerPicker.active:
+		return theme.ProviderPickerKeyHint
+	case m.loginForm.active:
+		return theme.LoginFormHint
+	case m.loginWait.active:
+		return theme.LoginWaitHint
 	case m.parked:
 		return "enter add a follow-up · ctrl+c interrupt · ctrl+o logs"
 	case strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0:

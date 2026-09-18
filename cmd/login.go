@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/mudler/nib/auth"
 	"github.com/mudler/nib/llmprovider/copilot"
 	"github.com/mudler/nib/plugin"
@@ -154,25 +156,49 @@ func loginCopilotToken(prog string, store *auth.Store, def provider.Definition) 
 }
 
 func loginAPIKey(prog string, store *auth.Store, def provider.Definition) int {
-	fmt.Printf("Enter API key for %s (input is hidden): ", def.Name)
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
+	key, err := readSecret(fmt.Sprintf("Enter API key for %s: ", def.Name))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\n%s login: read key: %v\n", prog, err)
 		return 1
 	}
-	key := strings.TrimSpace(line)
 	if key == "" {
-		fmt.Fprintf(os.Stderr, "\n%s login: empty key, aborting\n", prog)
+		fmt.Fprintf(os.Stderr, "%s login: empty key, aborting\n", prog)
 		return 1
 	}
-	cred, err := auth.LoginAPIKey(store, def, key)
+	baseURL := ""
+	if def.NeedsBaseURL() {
+		fmt.Printf("Base URL for %s: ", def.Name)
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil && line == "" {
+			fmt.Fprintf(os.Stderr, "\n%s login: read base URL: %v\n", prog, err)
+			return 1
+		}
+		baseURL = strings.TrimSpace(line)
+	}
+	cred, err := auth.LoginAPIKeyAt(store, def, key, baseURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s login: %v\n", prog, err)
 		return 1
 	}
 	fmt.Printf("Logged in to %s (%s)\n", def.Name, cred.DisplayLabel())
 	return 0
+}
+
+// readSecret prompts for a line without echoing it when stdin is a terminal,
+// and reads it plainly when piped (`echo $KEY | nib login groq`).
+func readSecret(prompt string) (string, error) {
+	fmt.Print(prompt)
+	fd := int(os.Stdin.Fd())
+	if term.IsTerminal(fd) {
+		b, err := term.ReadPassword(fd)
+		fmt.Println()
+		return strings.TrimSpace(string(b)), err
+	}
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
 }
 
 func loginList(prog string, store *auth.Store) int {
