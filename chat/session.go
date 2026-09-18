@@ -2066,23 +2066,7 @@ func (s *Session) listModels(ctx context.Context, provider types.ModelProviderCo
 		}
 		return nil, fmt.Errorf("Codex app-server model is not configured")
 	}
-	baseURL, apiKey, err := llmprovider.ModelsEndpoint(provider, s.credStore)
-	if err != nil {
-		return nil, err
-	}
-	cfg := openai.DefaultConfig(apiKey)
-	cfg.BaseURL = baseURL
-	resp, err := openai.NewClientWithConfig(cfg).ListModels(ctx)
-	if err != nil {
-		return nil, err
-	}
-	models := make([]string, 0, len(resp.Models))
-	for _, m := range resp.Models {
-		if m.ID != "" {
-			models = append(models, m.ID)
-		}
-	}
-	return models, nil
+	return llmprovider.ListModels(ctx, provider, s.credStore)
 }
 
 // fetchEndpointModels populates s.endpointModels with the model IDs the

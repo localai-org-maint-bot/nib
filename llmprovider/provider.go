@@ -10,12 +10,14 @@
 package llmprovider
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/mudler/cogito"
 	"github.com/mudler/cogito/clients"
+	openai "github.com/sashabaranov/go-openai"
 	"github.com/mudler/nib/auth"
 	"github.com/mudler/nib/codexapp"
 	"github.com/mudler/nib/llmprovider/registry"
@@ -78,8 +80,8 @@ func isCustomEndpoint(def provider.Definition, configured string) bool {
 	return configured != "" && configured != strings.TrimRight(def.BaseURL, "/")
 }
 
-// ErrNoModelList reports a provider whose protocol has no OpenAI-style model
-// listing nib can query. A UI should let the user type a model name instead.
+// ErrNoModelList reports a provider whose protocol has no model listing nib
+// can query. A UI should let the user type a model name instead.
 var ErrNoModelList = errors.New("this provider does not advertise a model list")
 
 // ModelsEndpoint returns the OpenAI-compatible base URL (the one /models hangs
@@ -106,6 +108,49 @@ func ModelsEndpoint(config types.ModelProviderConfig, store *auth.Store) (baseUR
 }
 
 const openAIDefaultBaseURL = "https://api.openai.com/v1"
+
+// ModelLister is implemented by native adapters whose API can enumerate the
+// models it serves (Anthropic, Google Gemini).
+type ModelLister interface {
+	ListModels(ctx context.Context) ([]string, error)
+}
+
+// ListModels returns the model IDs config's provider serves. OpenAI-compatible
+// endpoints (and Ollama's /v1) are queried at /models; native protocols are
+// asked through their adapter, with its own auth. Anything else returns
+// ErrNoModelList.
+func ListModels(ctx context.Context, config types.ModelProviderConfig, store *auth.Store) ([]string, error) {
+	baseURL, apiKey, err := ModelsEndpoint(config, store)
+	if err == nil {
+		cfg := openai.DefaultConfig(apiKey)
+		cfg.BaseURL = baseURL
+		resp, err := openai.NewClientWithConfig(cfg).ListModels(ctx)
+		if err != nil {
+			return nil, err
+		}
+		models := make([]string, 0, len(resp.Models))
+		for _, m := range resp.Models {
+			if m.ID != "" {
+				models = append(models, m.ID)
+			}
+		}
+		return models, nil
+	}
+	if !errors.Is(err, ErrNoModelList) {
+		return nil, err
+	}
+	// Building the adapter makes no request; it resolves credentials, so a
+	// missing key surfaces here as the adapter's own "no credentials" error.
+	llm, err := NewWithStore(config, store)
+	if err != nil {
+		return nil, err
+	}
+	lister, ok := llm.(ModelLister)
+	if !ok {
+		return nil, ErrNoModelList
+	}
+	return lister.ListModels(ctx)
+}
 
 // New returns an independent LLM transport. OpenAI means any
 // OpenAI-compatible HTTP endpoint, including a local LocalAI server.

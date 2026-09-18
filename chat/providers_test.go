@@ -97,8 +97,11 @@ func TestSwitchProviderAndBack(t *testing.T) {
 
 func TestListProviderModelsWithoutListing(t *testing.T) {
 	s := newProviderSession(t, types.ModelProviderConfig{Provider: "openai", Model: "local", BaseURL: "http://unused.invalid/v1"})
-	if _, err := s.ListProviderModels(context.Background(), "anthropic"); !errors.Is(err, llmprovider.ErrNoModelList) {
-		t.Fatalf("anthropic listing err = %v, want ErrNoModelList", err)
+	// Azure's adapter has no model listing (deployments are per account).
+	t.Setenv("AZURE_OPENAI_API_KEY", "az-key")
+	t.Setenv("AZURE_OPENAI_BASE_URL", "https://example.openai.azure.com/openai/v1")
+	if _, err := s.ListProviderModels(context.Background(), "azure"); !errors.Is(err, llmprovider.ErrNoModelList) {
+		t.Fatalf("azure listing err = %v, want ErrNoModelList", err)
 	}
 	if _, err := s.ListProviderModels(context.Background(), "nope"); err == nil {
 		t.Fatal("unknown provider was accepted")
