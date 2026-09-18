@@ -120,7 +120,14 @@ type Session struct {
 	// metadata, reasoningEffort) is fixed at construction and read lock-free.
  	modelMu         sync.RWMutex
 	llmModel        string // guarded by modelMu
-	mainProvider    types.ModelProviderConfig
+	mainProvider    types.ModelProviderConfig // guarded by modelMu
+	providerID      string                    // guarded by modelMu; ConfigProviderID until /login switches
+	// configProvider is the endpoint config.yaml describes, kept so the
+	// provider picker can switch back to it after using a /login provider.
+	configProvider types.ModelProviderConfig
+	// providerStatePath is where the /login-picked default provider is kept
+	// (ProviderStateFile); empty disables persistence.
+	providerStatePath string
 	credStore       *auth.Store // credential store for /login-managed providers
 
 	// learnedWindow is the context window a backend stated in an overflow
@@ -307,6 +314,8 @@ func (s *Session) newAgentLLM(mainModel, requested string, temperature float32, 
 }
 
 func (s *Session) resolvedSessionProvider() types.ModelProviderConfig {
+	s.modelMu.RLock()
+	defer s.modelMu.RUnlock()
 	if s.mainProvider.Configured() {
 		return s.mainProvider
 	}
@@ -446,6 +455,9 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		agentLogs:            newAgentLogStore(),
 		llmModel:             mainProvider.Model,
 		mainProvider:         mainProvider,
+		configProvider:       mainProvider,
+		providerStatePath:    filepath.Join(plugin.BaseDirIn(cfg.BaseDir), ProviderStateFile),
+		providerID:           ConfigProviderID,
 		credStore:            credStore,
 		apiKey:               mainProvider.APIKey,
 		baseURL:              mainProvider.BaseURL,
@@ -501,14 +513,20 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 	s.hooks.Fire(ctx, hooks.EventSessionStart, "", map[string]any{"event": "SessionStart"})
 
+	// A provider picked with /login in an earlier session is the default.
+	s.restoreDefaultProvider()
+
 	// Auto-detect the context window when the user did not set one explicitly.
 	// A zero MaxContextTokens means "unset" (config.go no longer defaults it);
 	// the probe and static table fill it in, with the 128k constant as the
 	// final fallback. Best-effort: on failure the 128k default is applied.
 	if s.compaction.MaxContextTokens == 0 {
 		s.compactionAutoDetected = true
+		// Probe the endpoint the client really talks to: a /login provider's
+		// own URL and stored key, not config.yaml's.
+		baseURL, apiKey, _ := llmprovider.ModelsEndpoint(s.resolvedSessionProvider(), s.credStore)
 		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-		if v := detectContextSize(probeCtx, s.baseURL, s.apiKey, mainProvider.Model); v > 0 {
+		if v := detectContextSize(probeCtx, baseURL, apiKey, s.Model()); v > 0 {
 			s.compaction.MaxContextTokens = v
 		} else {
 			s.compaction.MaxContextTokens = defaultContextTokens
@@ -1975,14 +1993,28 @@ func (s *Session) currentLLM() (cogito.LLM, string) {
 // currentLLM); the switch applies from the next turn. Safe to call from another
 // goroutine while a turn is running.
 func (s *Session) SetModel(name string) {
-	// Built outside the lock: every input is construction-time state, so
-	// nothing here needs to be ordered against a reader.
 	provider := s.resolvedSessionProvider()
 	provider.Model = name
-	llm, err := llmprovider.NewWithStore(provider, s.credStore)
-	if err != nil {
+	if err := s.applyProvider(provider, ""); err != nil {
 		xlog.Error("could not switch model", "model", name, "error", err)
 		return
+	}
+	// On a /login provider the saved default follows the model; config.yaml
+	// owns the model for its own endpoint.
+	if id := s.ProviderID(); id != "" && id != ConfigProviderID {
+		s.saveDefaultProvider(id, name)
+	}
+}
+
+// applyProvider rebuilds the session LLM for provider (see SetModel). A
+// non-empty providerID also records which picker entry is now current.
+func (s *Session) applyProvider(provider types.ModelProviderConfig, providerID string) error {
+	// Built outside the lock: every input is construction-time state, so
+	// nothing here needs to be ordered against a reader.
+	name := provider.Model
+	llm, err := llmprovider.NewWithStore(provider, s.credStore)
+	if err != nil {
+		return err
 	}
 	if s.tracer != nil {
 		llm = trace.NewRecordingLLM(llm, s.tracer, name, "")
@@ -1992,6 +2024,9 @@ func (s *Session) SetModel(name string) {
 	s.llm = llm
 	s.llmModel = name
 	s.mainProvider = provider
+	if providerID != "" {
+		s.providerID = providerID
+	}
 	s.modelMu.Unlock()
 
 	// The new model has never been asked for this session's prefix, so it is
@@ -2003,28 +2038,40 @@ func (s *Session) SetModel(name string) {
 	// Re-detect the context window for the new model, but only when the
 	// current value was auto-detected. An explicit user override is preserved.
 	if s.compactionAutoDetected {
+		// The probe needs the endpoint the client really talks to, which for a
+		// /login provider is its default URL and stored key, not the config's.
+		baseURL, apiKey, _ := llmprovider.ModelsEndpoint(provider, s.credStore)
 		probeCtx, cancel := context.WithTimeout(s.ctx, probeTimeout)
-		if v := detectContextSize(probeCtx, provider.BaseURL, provider.APIKey, name); v > 0 {
+		if v := detectContextSize(probeCtx, baseURL, apiKey, name); v > 0 {
 			s.modelMu.Lock()
 			s.compaction.MaxContextTokens = v
 			s.modelMu.Unlock()
 		}
 		cancel()
 	}
+	return nil
 }
 
 // ListModels returns the model IDs the configured endpoint advertises, so a UI
 // can offer them for /model. A failing endpoint surfaces as an error rather
 // than an empty list.
 func (s *Session) ListModels(ctx context.Context) ([]string, error) {
-	if llmprovider.IsCodex(s.resolvedSessionProvider()) {
+	return s.listModels(ctx, s.resolvedSessionProvider())
+}
+
+func (s *Session) listModels(ctx context.Context, provider types.ModelProviderConfig) ([]string, error) {
+	if llmprovider.IsCodex(provider) {
 		if model := s.Model(); model != "" {
 			return []string{model}, nil
 		}
 		return nil, fmt.Errorf("Codex app-server model is not configured")
 	}
-	cfg := openai.DefaultConfig(s.apiKey)
-	cfg.BaseURL = s.baseURL
+	baseURL, apiKey, err := llmprovider.ModelsEndpoint(provider, s.credStore)
+	if err != nil {
+		return nil, err
+	}
+	cfg := openai.DefaultConfig(apiKey)
+	cfg.BaseURL = baseURL
 	resp, err := openai.NewClientWithConfig(cfg).ListModels(ctx)
 	if err != nil {
 		return nil, err
@@ -2215,7 +2262,7 @@ func (s *Session) LoginList() string {
 		}
 		fmt.Fprintf(&b, "  %-12s  %s  (%s)  [%s]\n", d.ID, d.Name, d.LoginKind, status)
 	}
-	b.WriteString("\nRun: nib login <provider>")
+	b.WriteString("\nRun: /login <provider>")
 	return b.String()
 }
 
@@ -2270,7 +2317,7 @@ func (s *Session) StartLogin(ctx context.Context, providerID string) (*auth.Logi
 		), nil
 
 	case provider.LoginAPIKey:
-		return nil, fmt.Errorf("API key login is not supported in the TUI; run `nib login %s` from a terminal or set %s", def.ID, def.EnvVar)
+		return nil, fmt.Errorf("%s logs in with an API key: use SaveAPIKey", def.ID)
 
 	default:
 		return nil, fmt.Errorf("provider %s has no login flow", def.ID)

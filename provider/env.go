@@ -24,3 +24,11 @@ func (d Definition) EffectiveClientSecret() string {
 	}
 	return d.ClientSecret
 }
+
+// NeedsBaseURL reports whether logging in to this provider must also collect
+// an endpoint: it has no default base URL and nib cannot derive one (Azure,
+// where each account has its own resource URL). OpenAI's empty BaseURL means
+// the SDK default, so it does not count.
+func (d Definition) NeedsBaseURL() bool {
+	return d.LoginKind == LoginAPIKey && d.BaseURL == "" && d.ID != "openai"
+}

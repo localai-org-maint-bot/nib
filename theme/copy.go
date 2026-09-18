@@ -42,6 +42,31 @@ const (
 	ModelPickerNoMatches   = "no matching models."
 	ModelPickerSearchLabel = "search:"
 	ModelPickerKeyHint     = "type to filter · ↑↓ move · enter select · esc cancel"
+	// ModelPickerTypeName replaces the key hint when the provider being
+	// switched to offers no model list: the typed query itself is the model.
+	ModelPickerTypeName  = "type the model name · enter use it · esc cancel"
+	ModelPickerNameLabel = "name:"
+	ModelPickerUseTyped  = "enter uses the typed name."
+
+	// /login provider picker, API-key form and OAuth wait dialog
+	// (tui/providerpicker.go).
+	ProviderPickerTitle       = "provider"
+	ProviderPickerLogoutTitle = "log out of"
+	ProviderPickerKeyHint     = "type to filter · ↑↓ move · enter use or log in · esc cancel"
+	ProviderPickerLogoutHint  = "type to filter · ↑↓ move · enter log out · esc cancel"
+	ProviderPickerNoMatches   = "no matching providers."
+	ProviderNoneLoggedIn      = "not logged in to any provider · /login to add one"
+	ProviderCurrentSuffix     = " (current)"
+	ProviderSavedDefault      = "saved as default"
+	LoginFormTitle            = "log in to %s"
+	LoginFormKeyLabel         = "API key"
+	LoginFormURLLabel         = "Base URL"
+	LoginFormHint             = "paste or type · enter save · esc cancel"
+	LoginFormFieldsHint       = "paste or type · tab next field · enter save · esc cancel"
+	LoginFormEnvHint          = "or set $%s instead"
+	LoginWaitTitle            = "waiting for %s login…"
+	LoginWaitHint             = "finish in the browser · esc cancel"
+	LoginCancelled            = "login cancelled"
 
 	CLIWelcome = "a calm assistant for your terminal."
 	CLIExit    = "ctrl+c or 'exit' to leave · 'help' for commands"
@@ -147,6 +172,10 @@ const (
 	CompYoloDesc    = "toggle (or on/off) auto-approve every tool call"
 	CompResumeName  = "resume"
 	CompResumeDesc  = "resume a recorded session"
+	CompLoginName   = "login"
+	CompLoginDesc   = "log in to a provider or switch provider"
+	CompLogoutName  = "logout"
+	CompLogoutDesc  = "remove a stored provider login"
 
 	// ToolResultNoOutput is fmtBashResult's (chat/resultfmt.go) fallback for a
 	// failed bash/bash_job_output call whose stdout and stderr were both

@@ -10,6 +10,7 @@
 package llmprovider
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -47,13 +48,64 @@ func init() {
 // whose protocol is ProtocolOpenAICompletions. Credentials are resolved
 // from the store / config / env ladder.
 func openAIFactory(def provider.Definition, config types.ModelProviderConfig, store *auth.Store, temperature float32) (cogito.LLM, error) {
-	resolved, _ := auth.Resolve(store, def, config.APIKey)
-	llm := clients.NewLocalAILLM(config.Model, resolved.APIKey, orDefault(config.BaseURL, def.BaseURL))
+	baseURL, apiKey := openAIEndpoint(def, config, store)
+	llm := clients.NewLocalAILLM(config.Model, apiKey, baseURL)
 	llm.SetTemperature(temperature)
 	llm.SetMetadata(config.Metadata)
 	llm.SetReasoningEffort(config.ReasoningEffort)
 	return llm, nil
 }
+
+// openAIEndpoint returns the base URL and key an OpenAI-compatible request for
+// config should use.
+//
+// A config base URL that points somewhere other than the provider's own
+// endpoint is a custom server (LocalAI, vLLM, a proxy): it gets only the key
+// configured alongside it. Otherwise a key stored by /login for, say, OpenAI —
+// or a stray OPENAI_API_KEY — would be sent to whatever server base_url names,
+// since an unset provider resolves to the "openai" definition.
+func openAIEndpoint(def provider.Definition, config types.ModelProviderConfig, store *auth.Store) (baseURL, apiKey string) {
+	baseURL = orDefault(config.BaseURL, def.BaseURL)
+	if isCustomEndpoint(def, config.BaseURL) {
+		return baseURL, config.APIKey
+	}
+	resolved, _ := auth.Resolve(store, def, config.APIKey)
+	return baseURL, resolved.APIKey
+}
+
+func isCustomEndpoint(def provider.Definition, configured string) bool {
+	configured = strings.TrimRight(strings.TrimSpace(configured), "/")
+	return configured != "" && configured != strings.TrimRight(def.BaseURL, "/")
+}
+
+// ErrNoModelList reports a provider whose protocol has no OpenAI-style model
+// listing nib can query. A UI should let the user type a model name instead.
+var ErrNoModelList = errors.New("this provider does not advertise a model list")
+
+// ModelsEndpoint returns the OpenAI-compatible base URL (the one /models hangs
+// off) and key for config, resolving credentials the same way the LLM client
+// does. Protocols without such an endpoint return ErrNoModelList.
+func ModelsEndpoint(config types.ModelProviderConfig, store *auth.Store) (baseURL, apiKey string, err error) {
+	def, ok := provider.Get(normalize(config.Provider))
+	if !ok {
+		return "", "", fmt.Errorf("unknown LLM provider %q", config.Provider)
+	}
+	switch def.Protocol {
+	case provider.ProtocolOpenAICompletions:
+		baseURL, apiKey = openAIEndpoint(def, config, store)
+		if baseURL == "" {
+			baseURL = openAIDefaultBaseURL
+		}
+		return baseURL, apiKey, nil
+	case provider.ProtocolOllamaChat:
+		// Ollama serves an OpenAI-compatible /v1 next to its native API.
+		resolved, _ := auth.Resolve(store, def, config.APIKey)
+		return strings.TrimRight(orDefault(config.BaseURL, def.BaseURL), "/") + "/v1", resolved.APIKey, nil
+	}
+	return "", "", ErrNoModelList
+}
+
+const openAIDefaultBaseURL = "https://api.openai.com/v1"
 
 // New returns an independent LLM transport. OpenAI means any
 // OpenAI-compatible HTTP endpoint, including a local LocalAI server.

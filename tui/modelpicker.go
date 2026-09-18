@@ -4,8 +4,9 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mudler/nib/tui/render"
+	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/theme"
+	"github.com/mudler/nib/tui/render"
 )
 
 // modelPickerMaxVisible is the most model rows the dialog shows at once.
@@ -16,11 +17,18 @@ type modelPicker struct {
 	active    bool
 	loading   bool
 	requestID uint64
-	all       []string
-	matches   []string
-	query     string
-	selected  int
-	offset    int
+	// target is the provider being switched to (a /login pick), or nil for
+	// the session's current provider (/model).
+	target *chat.ProviderEntry
+	// typed means no model list is available for target: the query itself
+	// is the model name Enter uses.
+	typed    bool
+	listErr  string
+	all      []string
+	matches  []string
+	query    string
+	selected int
+	offset   int
 }
 
 func (p *modelPicker) open(requestID uint64) {
@@ -106,6 +114,12 @@ func (p *modelPicker) scrollSelectionIntoView(visible int) {
 
 func (p modelPicker) choice() (string, bool) {
 	if p.selected < 0 || p.selected >= len(p.matches) {
+		// A provider being switched to may serve models its list omits, and
+		// some have no list at all: Enter takes the typed name as-is. /model
+		// keeps refusing unlisted names (see Session.SwitchModel).
+		if (p.typed || p.target != nil) && strings.TrimSpace(p.query) != "" {
+			return strings.TrimSpace(p.query), true
+		}
 		return "", false
 	}
 	return p.matches[p.selected], true
@@ -139,11 +153,17 @@ func (p modelPicker) window() (start, end int) {
 func (m Model) buildModelPickerDialog() render.Dialog {
 	p := m.modelPicker
 	current := ""
-	if m.session != nil {
+	if m.session != nil && p.target == nil {
 		current = m.session.Model()
 	}
 
 	search := theme.ModelPickerSearchLabel
+	if p.typed {
+		search = theme.ModelPickerNameLabel
+	}
+	if p.target != nil {
+		search = p.target.Name + " model " + search
+	}
 	if p.query != "" {
 		search += " " + p.query
 	}
@@ -157,8 +177,15 @@ func (m Model) buildModelPickerDialog() render.Dialog {
 	switch {
 	case p.loading:
 		d.Hint = theme.ModelPickerLoading
+	case p.typed:
+		d.Hint = theme.ModelPickerTypeName
+		if p.listErr != "" {
+			d.Hint = p.listErr + " · " + d.Hint
+		}
 	case len(p.all) == 0:
 		d.Hint = theme.ModelPickerEmpty
+	case len(p.matches) == 0 && p.target != nil:
+		d.Hint = theme.ModelPickerNoMatches + " " + theme.ModelPickerUseTyped
 	case len(p.matches) == 0:
 		d.Hint = theme.ModelPickerNoMatches
 	default:

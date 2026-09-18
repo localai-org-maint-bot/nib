@@ -37,6 +37,9 @@ type Credential struct {
 
 	// CredentialAPIKey fields.
 	APIKey string `json:"api_key,omitempty"`
+	// BaseURL overrides the provider's default endpoint, for providers that
+	// have none (Azure: one resource URL per account).
+	BaseURL string `json:"base_url,omitempty"`
 
 	// CredentialOAuth fields.
 	AccessToken  string    `json:"access_token,omitempty"`
