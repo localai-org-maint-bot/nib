@@ -125,3 +125,21 @@ func TestListModelsWithoutListerIsErrNoModelList(t *testing.T) {
 		t.Fatalf("azure: err = %v, want ErrNoModelList", err)
 	}
 }
+
+func TestListModelChoicesFlagsPartialLists(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_API_KEY", "az-key")
+	t.Setenv("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-4.1=prod")
+	cfg := types.ModelProviderConfig{Provider: "azure", BaseURL: "https://example.openai.azure.com/openai/v1", Model: "gpt-4.1"}
+	ids, partial, err := ListModelChoices(context.Background(), cfg, nil)
+	if err != nil || !partial || len(ids) != 1 || ids[0] != "gpt-4.1" {
+		t.Fatalf("azure map: ids=%v partial=%v err=%v", ids, partial, err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"m","object":"model"}]}`))
+	}))
+	defer srv.Close()
+	if _, partial, _ := ListModelChoices(context.Background(), types.ModelProviderConfig{BaseURL: srv.URL}, nil); partial {
+		t.Fatal("an endpoint's own /models list is complete, not partial")
+	}
+}

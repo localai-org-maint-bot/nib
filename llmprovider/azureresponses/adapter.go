@@ -138,13 +138,23 @@ func resolveBaseURL(configured string) string {
 
 // resolveDeploymentName maps a model ID to an Azure deployment name.
 func resolveDeploymentName(modelID string) string {
-	if envMap := os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME_MAP"); envMap != "" {
-		for _, pair := range strings.Split(envMap, ",") {
-			kv := strings.SplitN(pair, "=", 2)
-			if len(kv) == 2 && strings.TrimSpace(kv[0]) == modelID {
-				return strings.TrimSpace(kv[1])
-			}
+	for _, kv := range deploymentMap() {
+		if kv[0] == modelID {
+			return kv[1]
 		}
 	}
 	return modelID
+}
+
+// deploymentMap parses AZURE_OPENAI_DEPLOYMENT_NAME_MAP ("model=deployment,…")
+// into ordered [model, deployment] pairs.
+func deploymentMap() [][2]string {
+	var out [][2]string
+	for _, pair := range strings.Split(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME_MAP"), ",") {
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) == 2 && strings.TrimSpace(kv[0]) != "" {
+			out = append(out, [2]string{strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1])})
+		}
+	}
+	return out
 }

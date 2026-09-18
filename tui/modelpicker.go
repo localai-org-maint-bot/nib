@@ -22,7 +22,10 @@ type modelPicker struct {
 	target *chat.ProviderEntry
 	// typed means no model list is available for target: the query itself
 	// is the model name Enter uses.
-	typed    bool
+	typed bool
+	// partial means the list is only a suggestion (built-in or mapped), so
+	// a typed name outside it is accepted like for a provider switch.
+	partial  bool
 	listErr  string
 	all      []string
 	matches  []string
@@ -117,7 +120,7 @@ func (p modelPicker) choice() (string, bool) {
 		// A provider being switched to may serve models its list omits, and
 		// some have no list at all: Enter takes the typed name as-is. /model
 		// keeps refusing unlisted names (see Session.SwitchModel).
-		if (p.typed || p.target != nil) && strings.TrimSpace(p.query) != "" {
+		if (p.typed || p.partial || p.target != nil) && strings.TrimSpace(p.query) != "" {
 			return strings.TrimSpace(p.query), true
 		}
 		return "", false
@@ -184,7 +187,7 @@ func (m Model) buildModelPickerDialog() render.Dialog {
 		}
 	case len(p.all) == 0:
 		d.Hint = theme.ModelPickerEmpty
-	case len(p.matches) == 0 && p.target != nil:
+	case len(p.matches) == 0 && (p.target != nil || p.partial):
 		d.Hint = theme.ModelPickerNoMatches + " " + theme.ModelPickerUseTyped
 	case len(p.matches) == 0:
 		d.Hint = theme.ModelPickerNoMatches

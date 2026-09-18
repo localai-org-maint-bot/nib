@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mudler/nib/auth"
@@ -153,5 +154,23 @@ func TestRestoreIgnoresUnknownProvider(t *testing.T) {
 	s.restoreDefaultProvider()
 	if s.ProviderID() != ConfigProviderID || s.Model() != "local" {
 		t.Fatalf("an unknown saved provider must leave config.yaml in charge: %q/%q", s.ProviderID(), s.Model())
+	}
+}
+
+func TestSwitchModelHonoursPartialLists(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_API_KEY", "az-key")
+	t.Setenv("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-4.1=prod")
+	s := newProviderSession(t, types.ModelProviderConfig{Provider: "azure", Model: "gpt-4.1", BaseURL: "https://example.openai.azure.com/openai/v1"})
+
+	// A deployment the map does not name is still accepted: the list is a
+	// suggestion, and refusing it would lock the user out of it.
+	notice, err := s.SwitchModel(context.Background(), "other-deployment")
+	if err != nil || s.Model() != "other-deployment" || !strings.Contains(notice, "suggested") {
+		t.Fatalf("partial list: notice=%q err=%v model=%q", notice, err, s.Model())
+	}
+
+	ids, partial, err := s.ModelChoices(context.Background(), "")
+	if err != nil || !partial || len(ids) != 1 {
+		t.Fatalf("ModelChoices = %v, %v, %v", ids, partial, err)
 	}
 }

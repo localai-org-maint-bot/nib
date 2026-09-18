@@ -147,6 +147,20 @@ func (s *Session) ListProviderModels(ctx context.Context, id string) ([]string, 
 	return s.listModels(ctx, p)
 }
 
+// ModelChoices lists the models of a picker entry ("" = the current provider)
+// and whether the list is partial, in which case a UI should also accept a
+// typed model name.
+func (s *Session) ModelChoices(ctx context.Context, id string) ([]string, bool, error) {
+	if id == "" {
+		return s.modelChoices(ctx, s.resolvedSessionProvider())
+	}
+	p, err := s.providerConfig(id)
+	if err != nil {
+		return nil, false, err
+	}
+	return s.modelChoices(ctx, p)
+}
+
 // SwitchProvider points the session at a picker entry and model, rebuilding
 // the LLM the way SetModel does. Conversation history is kept.
 func (s *Session) SwitchProvider(id, model string) error {

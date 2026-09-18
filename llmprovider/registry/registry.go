@@ -11,6 +11,8 @@
 package registry
 
 import (
+	"errors"
+
 	"github.com/mudler/cogito"
 	"github.com/mudler/nib/auth"
 	"github.com/mudler/nib/provider"
@@ -38,4 +40,17 @@ func Register(p provider.Protocol, f Factory) {
 func Get(p provider.Protocol) (Factory, bool) {
 	f, ok := factories[p]
 	return f, ok
+}
+
+// ErrNoModelList reports a provider that cannot enumerate its models (it is
+// re-exported as llmprovider.ErrNoModelList). It lives here so an adapter's
+// ListModels can return it without importing llmprovider.
+var ErrNoModelList = errors.New("this provider does not advertise a model list")
+
+// PartialModelList is implemented by adapters whose ListModels returns a
+// suggestion rather than everything the account can use (a built-in list, or
+// a user-maintained mapping). Callers should then accept model names missing
+// from the list instead of refusing them.
+type PartialModelList interface {
+	ModelListIsPartial() bool
 }

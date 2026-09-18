@@ -78,3 +78,18 @@ func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
 	}
 	return ids, nil
 }
+
+// KnownChatModels are Gemini chat models for backends that cannot enumerate
+// them: Cloud Code Assist (Gemini CLI) has no listing endpoint, and Vertex's
+// publisher-model listing refuses API keys. It is a suggestion for the model
+// picker, where a name missing from it can still be typed; the server decides
+// whether the account may use it. Returns a fresh copy.
+func KnownChatModels() []string {
+	return []string{
+		"gemini-2.5-pro",
+		"gemini-2.5-flash",
+		"gemini-2.5-flash-lite",
+		"gemini-3-pro-preview",
+		"gemini-3-flash-preview",
+	}
+}
