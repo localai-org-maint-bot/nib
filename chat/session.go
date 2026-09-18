@@ -1594,7 +1594,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	if s.fragment.Status != nil {
 		promptTokens = s.fragment.Status.LastUsage.PromptTokens
 	}
-	if shouldAutoCompact(s.compaction, s.contextWindow(), promptTokens) {
+	if s.shouldCompactNow(promptTokens) {
 		if s.callbacks.OnStatus != nil {
 			s.callbacks.OnStatus("Compacting conversation…")
 		}
@@ -1797,7 +1797,13 @@ func (s *Session) Reload(cfg types.Config) error {
 	if cfg.Prompt != "" {
 		s.systemPrompt = cfg.GetPrompt() + s.loadedSkills + s.agentModelGuidance()
 	}
+	// Guarded because SetModel writes s.compaction.MaxContextTokens under the
+	// same lock when it re-detects the window for a new model. Reload runs at
+	// turn start on the turn goroutine, but SetModel runs on whichever
+	// goroutine drives the UI, so the two can overlap.
+	s.modelMu.Lock()
 	s.compaction = cfg.Compaction
+	s.modelMu.Unlock()
 	// Guarded, unlike its neighbours: the manipulator reads the policy from
 	// inside cogito's loop, so a reload that lands while any part of a turn is
 	// still winding down would otherwise be a data race.
